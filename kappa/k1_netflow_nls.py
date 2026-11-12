@@ -27,9 +27,12 @@ deposits R4d), pools lagged and divided by own lagged savings Dep_j2 as in K0:
     Pedro 11-06; the constant theta_w is reported as its check): no theta_w, one market-quarter exit
     coefficient on the whole movable stock (Q4m + Q4d), which where Q4d = 0 is theta_w free by market-quarter.
 The clock: there is no E_c parameter. Under A4, ln E_c = kappa (savings) - kappa_td, read after the fit
-in the lambda = 1 row only (--lambda-one, D2). In the headline, lambda from the statements is about
-zero, so Q4d = R4d = 0 below DAILY_MIN and the time-deposit pair is not estimable: it is dropped, and the
-output says so.
+wherever the time-deposit pair is in the model, that is where the daily-liquidity share of the type-4
+pools is at least DAILY_MIN: the lambda = 1 row (--lambda-one, D2) and the registry versions (--lambda
+R-q, R-const, R-fixmem, R-annual; B lambda about 0.8), which estimate kappa_td, its shifters and ln E_c
+(pilots, Pedro 11-11). With the statements' lambda (S-stmt, the default) lambda is about zero, so
+Q4d = R4d = 0 below DAILY_MIN and the time-deposit pair is not estimable: it is dropped, and the output
+says so. A registry version below DAILY_MIN stops.
 
 Estimation: variable projection as in diagnostics/diag_k2_nls_simulation.py, whose effect block
 (kn.Effects, kn.als_effects) is imported unchanged. nls_fit_k1 is kn.nls_fit's Levenberg-Marquardt loop
@@ -52,8 +55,24 @@ Inputs.
     deposits). omega is the share maturing in the quarter; automatic reinvestment is banned in the
     window (Res. CMN 3.454/2007, 5.005/2022), so matured money lands in checking. The statement of year y
     applies to the quarters of year y + 1, 2016 quarters take 2016. lambda = share_no_maturity for B
-    banks with a statement, the year's B median of it otherwise (about zero), 1 for D banks;
-    --lambda-one sets lambda = 1 for every bank (D2).
+    banks with a statement, the year's B median of it otherwise (about zero), 1 for D banks (S-stmt,
+    the default); --lambda-one sets lambda = 1 for every bank (D2).
+  - --lambda R-q | R-const | R-fixmem | R-annual (Pedro, 11-11; not with --lambda-one): lambda from BCB
+    registry 025399 (make_lambda_registry.py), read at t - 1, the date of the stocks behind the pools
+    (Pedro, 11-12): lambda_jt is the version's series at (j, t - 1), membership included. The series is
+    the version's PF/PJ column (Rq_pfpj, Rconst_pfpj, Rfixmem_pfpj, Rannual_pfpj) of
+    Rout/lambda_registry/lambda_conglomerate_quarter.csv for a B conglomerate-quarter (the file's
+    is_B), 1 for a D one. Where the file has the conglomerate but not that quarter (option B, Pedro
+    11-12; 2015Q4 for the 2016Q1 rows, before the file starts), the membership follows the registry's
+    own rule: carried from the conglomerate's last quarter in the file, held back from its first when
+    there is no earlier one; the value is the version's for that segment at t - 1 in
+    registry_segment_quarter.csv (pfpj), at the file's first quarter before it starts (the registry
+    holds each segment's first value back). omega stays the statements'. The registry must be built on
+    the panel K1 reads (lambda_registry_numbers.json), and both files and that json must be the ones its
+    md5_manifest.csv lists. A conglomerate-quarter of the K1 rows or the unit table with a lagged type-4
+    stock and no lambda (a conglomerate not in the file, or B with no value) stops every spec whose
+    estimation rows it reaches (its own row, or the rivals' pools of its market-quarter); a unit-table
+    row with no lagged type-4 stock carries no pool and is not read.
   - Control function: the conglomerate-quarter type-4 spread (spread_ann_a4_national, pp) on COST_IV
     with quarter effects, weighted by the type-4 stock, on the quarters without a carried rate (P3's
     cost_fit, measured version); v = the residual, in the exponent (`cf_v`).
@@ -112,8 +131,12 @@ Usage: python -I kappa/k1_netflow_nls.py --test 1 --ctx <k2n_ctx_full.pkl>
               --allow-interim [--lambda-one] [--exit-by-cell] [--trim p99] --out <dir>
        python -I kappa/k1_netflow_nls.py --spec before_after,dose --ctx <ctx.pkl> --panel <panel>
               --exit-by-cell --trim p99   (final inputs, the headline form)
-Outputs (--out, default Rout/k1): k1_estimates.csv (one row per spec and solution, rewritten after each spec),
-k1_numbers.json (inputs, md5s, first stages, samples, tests).
+       python -I kappa/k1_netflow_nls.py --spec before_after --ctx <ctx.pkl> --panel <panel>
+              --exit-by-cell --trim p99 --lambda R-q   (registry lambda; output Rout/k1_R-q)
+Outputs (--out, default Rout/k1, and Rout/k1_<version> for a registry version): k1_estimates.csv (one row
+per spec and solution, rewritten after each spec), k1_numbers.json (inputs, md5s, first stages, samples,
+tests); both record lambda_version (S-stmt, lambda-one or the registry version). A registry version
+writes only into a folder with no K1 outputs or with outputs of the same version.
 """
 import sys
 from pathlib import Path
@@ -146,6 +169,15 @@ ROUT = paths.rout_dir()
 OUT = ROUT / "k1"
 FINAL_PANEL = "fa38794d"            # I17, 11-05 10:39
 OMEGA_FILE = ROUT / "k0_omega.csv"
+LAMBDA_DIR = ROUT / "lambda_registry"     # make_lambda_registry.py
+LAMBDA_FILE = LAMBDA_DIR / "lambda_conglomerate_quarter.csv"
+LAMBDA_SEGMENTS = LAMBDA_DIR / "registry_segment_quarter.csv"
+LAMBDA_NUMBERS = LAMBDA_DIR / "lambda_registry_numbers.json"
+LAMBDA_MANIFEST = LAMBDA_DIR / "md5_manifest.csv"
+LAMBDA_VERSIONS = ("S-stmt", "R-q", "R-const", "R-fixmem", "R-annual")
+REGISTRY_COL = {"R-q": "Rq_pfpj", "R-const": "Rconst_pfpj", "R-fixmem": "Rfixmem_pfpj", "R-annual": "Rannual_pfpj"}
+REGISTRY_FILL = {"R-q": "fill_Rq", "R-const": "fill_Rconst", "R-fixmem": "fill_Rfixmem", "R-annual": "fill_Rannual"}
+SEGMENT_COL = {"R-q": "Rq", "R-const": "Rconst", "R-fixmem": "Rq", "R-annual": "Rannual"}   # registry_segment_quarter.csv
 K0_NUMBERS = ROUT / "k0_numbers.json"
 P1_FILE = ROUT / "p1_pix_dose_exposure_mca.csv"
 P2_ADV = ROUT / "p2_advertising_conglomerate_quarter.csv"
@@ -866,6 +898,112 @@ def omega_lambda(j, qidx, tab, fill):
     return out[:, 0], out[:, 1]
 
 
+def registry_lambda(version, panel_md5, K, U):
+    """lambda of a registry version (--lambda R-*, module docstring) for the K1 rows K and the unit table
+    U, read at t - 1: lambda(j, t) is the version's series at (j, t - 1), the quarter of the stocks behind
+    the pools, membership included. The series is the version's PF/PJ column of LAMBDA_FILE at (j, t - 1)
+    (j = CodConglomeradoPrudencial, the file's code; quarters from its year and quarter) where the file
+    marks the conglomerate-quarter B, 1 where it marks it D. Where the file has j but not t - 1 (option B):
+    j's membership (seg, fixmem_seg for R-fixmem, and B or D) is that of its last quarter in the file
+    before t - 1 (carried), else of its first after it (held back), and the value is the version's for
+    that segment in LAMBDA_SEGMENTS (pfpj) at t - 1, at the file's first quarter when t - 1 precedes it.
+    A row whose conglomerate is not in the file, or B with no value, has no lambda (NaN) when it has a
+    lagged type-4 stock (D4 > 0); with D4 = 0 it carries no pool and gets 0. Returns lambda for K and for
+    U, the conglomerate-quarters (j, t - 1) with no lambda that each K row reaches (its own and the
+    rivals' pools of its market-quarter; "" for none) and the record."""
+    reg_md5 = str(json.loads(LAMBDA_NUMBERS.read_text(encoding="utf-8"))["inputs"]["panel"]["md5"])
+    if reg_md5 != panel_md5:
+        raise SystemExit(f"{LAMBDA_NUMBERS.name}: the registry lambdas are built on panel {reg_md5[:8]}, "
+                         f"K1 reads {panel_md5[:8]}")
+    listed = pd.read_csv(LAMBDA_MANIFEST).set_index("file")["md5"]
+    md5s = {p.name: k0.md5(p) for p in (LAMBDA_FILE, LAMBDA_SEGMENTS, LAMBDA_NUMBERS)}
+    for name, got in md5s.items():
+        if listed.get(name) != got:
+            raise SystemExit(f"{name}: md5 {got[:8]}, {LAMBDA_MANIFEST.name} lists {str(listed.get(name))[:8]}")
+    col, fcol = REGISTRY_COL[version], REGISTRY_FILL[version]
+    segc = "fixmem_seg" if version == "R-fixmem" else "seg"
+    R = pd.read_csv(LAMBDA_FILE, dtype={"code": str}, usecols=["code", "is_B", "year", "quarter", segc, col, fcol],
+                    float_precision="round_trip")
+    R["qi"] = qi(R["year"], R["quarter"])
+    if R.duplicated(["code", "qi"]).any():
+        raise SystemExit(f"{LAMBDA_FILE.name}: a conglomerate-quarter repeats")
+    R = R.sort_values(["code", "qi"]).reset_index(drop=True)
+    G = pd.read_csv(LAMBDA_SEGMENTS, float_precision="round_trip")
+    G = G[G["holders"] == "pfpj"]
+    G_qi = qi(G["year"], G["quarter"])
+    g_first = int(G_qi.min())
+    seg_val = dict(zip(zip(G["segment"], G_qi.astype(int)), G[SEGMENT_COL[version]].astype(float)))
+
+    # every (j, t - 1) the rows ask for, resolved once
+    ask = pd.concat([pd.DataFrame({"j": X["j"].to_numpy(), "s": X["qi"].to_numpy() - 1}) for X in (K, U)])
+    ask = ask.drop_duplicates().reset_index(drop=True)
+    i = pd.MultiIndex.from_arrays([R["code"].to_numpy(), R["qi"].to_numpy()]).get_indexer(
+        pd.MultiIndex.from_arrays([ask["j"].to_numpy(), ask["s"].to_numpy()]))
+    isb_r = R["is_B"].to_numpy() == 1
+    lam = np.where(i >= 0, np.where(isb_r[i], R[col].to_numpy(float)[i], 1.0), np.nan)
+    isb = np.where(i >= 0, isb_r[i], False)
+    in_file_fill = np.where(i >= 0, R[fcol].to_numpy()[i] == 1, False)
+    how = np.where(i >= 0, "file", "none").astype(object)
+    seg = np.where(i >= 0, R[segc].to_numpy(dtype=object)[i], None)
+    rows_of = dict(tuple(R.groupby("code", sort=False)))
+    for k in np.flatnonzero(i < 0):
+        g = rows_of.get(ask["j"].iat[k])
+        if g is None:
+            continue
+        s = int(ask["s"].iat[k])
+        before = g[g["qi"] < s]
+        m, how[k] = (before.iloc[-1], "carried") if len(before) else (g[g["qi"] > s].iloc[0], "held_back")
+        seg[k], isb[k] = m[segc], m["is_B"] == 1
+        lam[k] = (seg_val.get((seg[k], max(s, g_first)), np.nan) if isinstance(seg[k], str) else np.nan) if isb[k] else 1.0
+    akey = pd.MultiIndex.from_arrays([ask["j"].to_numpy(), ask["s"].to_numpy()])
+
+    def look(X):
+        r = akey.get_indexer(pd.MultiIndex.from_arrays([X["j"].to_numpy(), X["qi"].to_numpy() - 1]))
+        out = lam[r].copy()
+        no_stock = np.isnan(out) & (X["D4"].to_numpy() == 0)
+        out[no_stock] = 0.0
+        return out, r, int(no_stock.sum())
+
+    def label(q):
+        return f"{q // 4}Q{q % 4 + 1}"
+
+    lam_k, rk, nk_zero = look(K)
+    lam_u, ru, nu_zero = look(U)
+    mu = np.isnan(lam_u)
+    tags = [f"{j} {label(q - 1)}" for j, q in zip(U["j"].to_numpy()[mu], U["qi"].to_numpy()[mu])]
+    by_mt = pd.Series(tags, dtype=object).groupby(U["mt"].to_numpy()[mu]).agg(lambda s_: "; ".join(sorted(set(s_))))
+    reach = K["mt"].map(by_mt).fillna("").to_numpy(dtype=object)
+    kb = isb[rk]
+    stock_u = U["D4"].to_numpy() > 0
+    nk, nu = np.bincount(rk, minlength=len(ask)), np.bincount(ru[stock_u], minlength=len(ask))
+    fills = [{"conglomerate": ask["j"].iat[k], "quarter": label(int(ask["s"].iat[k])), "rule": how[k],
+              "segment": seg[k] if isinstance(seg[k], str) else None, "B": bool(isb[k]),
+              "lambda": float(lam[k]) if np.isfinite(lam[k]) else None, "K1_rows": int(nk[k]),
+              "unit_rows_with_stock": int(nu[k])} for k in np.flatnonzero((how == "carried") | (how == "held_back"))]
+    missing = [{"conglomerate": j, "quarter": label(q - 1), "unit_rows": int(len(g)),
+                "lagged_type4_stock_brl_m": float(g["D4"].sum() / 1e6), "market_quarters": int(g["mt"].nunique()),
+                "K1_rows_reached": int(K["mt"].isin(g["mt"]).sum())} for (j, q), g in U[mu].groupby(["j", "qi"])]
+    src_k = {str(a): int(b) for a, b in pd.Series(how[rk]).value_counts().items()}
+    info = {"version": version, "column": col, "timing": "t - 1, the quarter of the stocks behind the pools",
+            "md5": md5s, "registry_panel_md5": reg_md5,
+            "K1_rows_B": int(kb.sum()), "K1_rows_D_one": int((~kb & (how[rk] != "none")).sum()),
+            "K1_rows_by_source": src_k,
+            "unit_rows_with_stock_by_source": {str(a): int(b) for a, b in pd.Series(how[ru][stock_u]).value_counts().items()},
+            "K1_rows_B_registry_fill_flag": int((kb & in_file_fill[rk]).sum()),
+            "K1_rows_no_lambda": int(np.isnan(lam_k).sum()), "K1_rows_no_value_no_stock": nk_zero,
+            "unit_rows_no_lambda": int(mu.sum()), "unit_rows_no_value_no_stock": nu_zero,
+            "K1_rows_reaching_no_lambda": int((reach != "").sum()),
+            "lambda_mean_K1_rows_B": float(np.nanmean(lam_k[kb])) if kb.any() else None,
+            "option_B": fills, "no_lambda": missing}
+    stamp(f"lambda {version} ({col}) at t - 1: K1 rows B {info['K1_rows_B']:,}, D {info['K1_rows_D_one']:,}; from the file "
+          f"{src_k.get('file', 0):,}, option B carried {src_k.get('carried', 0):,} and held back {src_k.get('held_back', 0):,} "
+          f"({len(fills)} conglomerate-quarters: {', '.join(sorted({d['quarter'] for d in fills})) or '-'}); mean on B rows "
+          f"{info['lambda_mean_K1_rows_B']:.4f}; no lambda: "
+          + ("none" if not missing else ", ".join(f"{d['conglomerate']} {d['quarter']} ({d['unit_rows']} unit rows, "
+                                                  f"{d['K1_rows_reached']} K1 rows reached)" for d in missing)))
+    return lam_k, lam_u, reach, info
+
+
 def control_function(px):
     """First stage of the conglomerate-quarter type-4 spread on the cost shifters (module docstring)."""
     agg = dict(spread=("spread_ann_a4_national", "first"), dep4=("dep_a4", "sum"), carried=("rate_a4_carried", "max"),
@@ -931,8 +1069,9 @@ def panel_extras(panel, md5_expect):
     return px, got
 
 
-def assemble(ctx, panel, allow_interim, lambda_one=False):
-    """The K1 rows with every column a spec reads (module docstring)."""
+def assemble(ctx, panel, allow_interim, lambda_one=False, lambda_version="S-stmt"):
+    """The K1 rows with every column a spec reads (module docstring). A registry lambda_version adds
+    lam_missing, the conglomerate-quarters with no registry lambda that each row reaches."""
     K, MT, U = ctx["K"].copy(), ctx["MT"], ctx["U"]
     N0 = ctx["N0"]
     md5 = str(N0.get("panel_md5_read") or N0["panel_md5"])
@@ -948,6 +1087,8 @@ def assemble(ctx, panel, allow_interim, lambda_one=False):
     tab, fill, info["omega_lambda"] = clock_table(lambda_one)
     om, la = omega_lambda(K["j"].to_numpy(), K["qi"].to_numpy(), tab, fill)
     uo, ul = omega_lambda(U["j"].to_numpy(), U["qi"].to_numpy(), tab, fill)
+    if lambda_version in REGISTRY_COL:
+        la, ul, lam_missing, info["lambda_registry"] = registry_lambda(lambda_version, md5_full, K, U)
     mt, nmt = U["mt"].to_numpy(), len(MT)
     D4u = U["D4"].to_numpy()
     S4 = np.bincount(mt, D4u, nmt)
@@ -963,6 +1104,8 @@ def assemble(ctx, panel, allow_interim, lambda_one=False):
     K["R4m"], K["R4d"] = (Sm[km] - om * D4) / own2, (Sd[km] - (1 - om) * la * D4) / own2
     accr = (K["carry4"] / K["own2"]).to_numpy()
     K["Em"], K["Ed"] = accr * om, accr * (1 - om) * la
+    if lambda_version in REGISTRY_COL:
+        K["lam_missing"] = lam_missing
     # control function
     v, info["control_function"] = control_function(px)
     K = K.merge(v, on=["j", "qi"], how="left")
@@ -1025,6 +1168,19 @@ def guard(ctx, allow_interim, n_markets):
     if not 0 < n_markets <= MAX_INTERIM_MARKETS:
         raise SystemExit(f"interim inputs: smoke tests only, --markets 1 to {MAX_INTERIM_MARKETS}")
     return rec
+
+
+def check_out(out, version):
+    """A registry version writes only into a folder with no K1 outputs or with outputs of the same
+    version (its k1_numbers.json records lambda_version), so it never overwrites another version's."""
+    nums = out / "k1_numbers.json"
+    have = [p.name for p in (out / "k1_estimates.csv", nums) if p.exists()]
+    if not have:
+        return
+    rec = json.loads(nums.read_text(encoding="utf-8")).get("lambda_version") if nums.exists() else None
+    if rec != version:
+        raise SystemExit(f"{out} holds {', '.join(have)} of lambda {rec or 'not recorded'}: --lambda {version} "
+                         f"writes to a folder of its own")
 
 
 # -------------------------------------------------------------------------------------------- specs
@@ -1131,17 +1287,29 @@ def design(Kw, MT, spec, cf, exit_by_cell=False, matured_scale=False, savings_on
 
 
 def run_spec(K, MT, label, markets, draws, exit_by_cell=False, trim=None, starts=STARTS, maxit=MAXIT,
-             matured_scale=False, savings_only=False, smooth=False):
+             matured_scale=False, savings_only=False, smooth=False, lambda_version="S-stmt"):
     """One spec: the multistart fit, then up to two reported solutions (Pedro, 11-06): INTERIOR, the
     lowest-SSR start with no parameter at its box, and BOUNDARY, the lowest-SSR start overall when that
     start has a box hit. Each solution gets its own score bootstrap (at its own Jacobian and residual)
-    and its own restricted fits (started from it). Returns one row per solution (column `solution`)."""
+    and its own restricted fits (started from it). Returns one row per solution (column `solution`).
+    A registry lambda_version stops when an estimation row reaches a conglomerate-quarter with no
+    registry lambda, or when its daily-liquidity share is below DAILY_MIN (no time-deposit pair)."""
     spec, _, sample = label.partition("+")
     if spec not in SPECS or (sample and sample not in SAMPLES):
         raise SystemExit(f"unknown spec {label}")
     t0 = time.time()
     Kw, cf = rows_for(K, spec, sample or None, markets, trim=trim)
+    if lambda_version in REGISTRY_COL:
+        hit = Kw["lam_missing"].to_numpy(dtype=object) != ""
+        if hit.any():
+            keys = sorted(set("; ".join(Kw.loc[hit, "lam_missing"]).split("; ")))
+            raise SystemExit(f"{label}: {int(hit.sum())} estimation rows in {Kw.loc[hit, 'm'].nunique()} markets reach a "
+                             f"conglomerate-quarter (t - 1) with a lagged type-4 stock and no {lambda_version} lambda in "
+                             f"{LAMBDA_DIR.name} (own row or rivals' pools): {', '.join(keys)}")
     model, S = design(Kw, MT, spec, cf, exit_by_cell, matured_scale, savings_only)
+    if lambda_version in REGISTRY_COL and not S["td"]:
+        raise SystemExit(f"{label}: the daily-liquidity share of the type-4 pools is {S['daily_share']:.1e} under "
+                         f"--lambda {lambda_version}, below {DAILY_MIN:g}: kappa_td and ln E_c would not be estimated")
     _, _, d, _, _ = multistart_k1(S["y"], S["E"], S["a"], S["b"], S["m"], S["cl"], model, starts=starts,
                                   rowscale=S["d"], Em=S["Em"], maxit=maxit, smooth=smooth)
     fits = d["fits"]
@@ -1159,7 +1327,7 @@ def run_spec(K, MT, label, markets, draws, exit_by_cell=False, trim=None, starts
               "exit": "theta_w free by market-quarter (whole movable stock)" if exit_by_cell else "theta_w one constant",
               "trim": trim or "none", "maxit": maxit, "starts": ";".join(f"{v:g}" for v in d["starts"]),
               "best_start": d["best_start"], "matured_scale": bool(matured_scale),
-              "savings_only": bool(savings_only), "smooth_effects": bool(smooth)}
+              "savings_only": bool(savings_only), "smooth_effects": bool(smooth), "lambda_version": lambda_version}
     for key in ("start_dkappas", "start_ssr", "start_floored"):
         if key in d:
             common[key] = ";".join(f"{v:.6g}" for v in d[key])
@@ -1227,9 +1395,11 @@ def run_spec(K, MT, label, markets, draws, exit_by_cell=False, trim=None, starts
 
 
 # -------------------------------------------------------------------------------------------- tests
-def test1(ctx, smooth=False):
+def test1(ctx, smooth=False, recovery=None):
     """nls_fit_k1 with K2's Model (no theta_w) on simulated y, fe world at kappa 0.5, per pair: the
-    two-start fit equals step 2's row of k2_nls_recovery.csv to 1e-8, standard errors included."""
+    two-start fit equals step 2's row of k2_nls_recovery.csv to 1e-8, standard errors included.
+    recovery: the k2_nls_recovery.csv to compare with (default RECOVERY); it must come from the same
+    K2 simulation (alpha, panel) as the context pickle."""
     e4 = kn.world_e4(ctx, "fe")
     S = kn.sample(ctx, e4)
     A, NF = k2.simulate(ctx["U"], ctx["MT"], ctx["SD"], ctx["SD4"], e4, kn.KAPPA_BASE)
@@ -1237,7 +1407,7 @@ def test1(ctx, smooth=False):
     m0 = kn.Model(S["cols"], S["g"], split=True)
     est, V, d, Jt, r = multistart_k1(y, S["E"], S["a"], S["b"], S["m"], S["cl"], m0, starts=kn.STARTS, rowscale=S["d"],
                                      maxit=200, smooth=smooth)
-    R = pd.read_csv(RECOVERY)
+    R = pd.read_csv(recovery or RECOVERY)
     ref = R[(R["world"] == "fe") & (R["kappa_true"] == kn.KAPPA_BASE) & (R["model"] == "split")].iloc[0]
     diff = {n: float(est[n] - ref[n]) for n in m0.names}
     se_f = np.sqrt(np.maximum(np.diag(V.to_numpy()), 0))
@@ -1329,7 +1499,11 @@ def main():
     ap.add_argument("--panel", default=None, help="the market panel the context was built on")
     ap.add_argument("--markets", type=int, default=0, help="smoke test: a random subset of markets (kn's draw)")
     ap.add_argument("--allow-interim", action="store_true", help="non-final inputs, smoke tests only")
-    ap.add_argument("--lambda-one", action="store_true", help="lambda = 1 for every bank (D2): the time-deposit pair and ln E_c")
+    lam = ap.add_mutually_exclusive_group()
+    lam.add_argument("--lambda-one", action="store_true", help="lambda = 1 for every bank (D2): the time-deposit pair and ln E_c")
+    lam.add_argument("--lambda", dest="lambda_version", choices=LAMBDA_VERSIONS, default="S-stmt",
+                     help="lambda of the time deposits: S-stmt, the statements' (default); R-q (headline), R-const, R-fixmem, "
+                          "R-annual, BCB registry 025399 for B (Rout/lambda_registry), 1 for D; output Rout/k1_<version>")
     ap.add_argument("--exit-by-cell", action="store_true", help="robustness: the matured exit coefficient free by market-quarter")
     ap.add_argument("--trim", choices=("none", "p99"), default="none",
                     help="p99: drop rows with |NF/Dep_j2| above the 99th percentile of each spec's rows (the headline)")
@@ -1341,10 +1515,15 @@ def main():
                     help="the 11-03 savings pair: own and rivals' checking and matured pools out of the bracket (no a, no checking pair)")
     ap.add_argument("--smooth-effects", action="store_true",
                     help="K1-S (Pedro 11-07): effects as exp(psi), Gauss-Newton inner solve, warm-started (SmoothProfile)")
+    ap.add_argument("--recovery", default=None,
+                    help="test 1 only: the k2_nls_recovery.csv to compare with (default Rout/k2_nls_recovery.csv)")
     ap.add_argument("--draws", type=int, default=DRAWS)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
-    out = Path(args.out) if args.out else OUT
+    lam_version = "lambda-one" if args.lambda_one else args.lambda_version
+    out = Path(args.out) if args.out else OUT if args.lambda_version == "S-stmt" else ROUT / f"k1_{args.lambda_version}"
+    if args.lambda_version in REGISTRY_COL:
+        check_out(out, args.lambda_version)
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     if args.ctx and Path(args.ctx).exists():
@@ -1360,24 +1539,26 @@ def main():
     path = out / "k1_numbers.json"
     if args.test:
         key = f"test_{args.test}" + ("_smooth" if args.smooth_effects else "")
-        N[key] = (test1(ctx, smooth=args.smooth_effects) if args.test == "1"
+        N[key] = (test1(ctx, smooth=args.smooth_effects, recovery=args.recovery) if args.test == "1"
                   else test2(ctx, savings_only=args.test == "2s", smooth=args.smooth_effects))
     else:
         if not args.spec or not args.panel:
             raise SystemExit("--spec and --panel are needed for a fit")
         N["guard"] = guard(ctx, args.allow_interim, args.markets)
+        N["lambda_version"] = lam_version
         markets = None
         if args.markets:
             markets = set(pd.Series(ctx["K"]["m"].unique()).sample(args.markets, random_state=3))
             N["smoke_test_markets"] = args.markets
-        K, N["inputs"] = assemble(ctx, args.panel, args.allow_interim, lambda_one=args.lambda_one)
+        K, N["inputs"] = assemble(ctx, args.panel, args.allow_interim, lambda_one=args.lambda_one,
+                                  lambda_version=args.lambda_version)
         rows = []
         for label in args.spec.split(","):
             rows.extend(run_spec(K, ctx["MT"], label, markets, args.draws, exit_by_cell=args.exit_by_cell,
                                  trim=None if args.trim == "none" else args.trim,
                                  starts=tuple(float(v) for v in args.starts.split(",")), maxit=args.maxit,
                                  matured_scale=args.matured_scale, savings_only=args.savings_only,
-                                 smooth=args.smooth_effects))
+                                 smooth=args.smooth_effects, lambda_version=lam_version))
             pd.DataFrame(rows).to_csv(out / "k1_estimates.csv", index=False)
     N["seconds"] = round(time.time() - t0)
     old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}

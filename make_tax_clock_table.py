@@ -178,8 +178,8 @@ def render_tex(df: pd.DataFrame, panel_b: bool) -> str:
                      f"{fmt(r['premium_pct_cdi'], DEC['premium_pct_cdi'])} \\\\")
     if panel_b:
         lines += [r"\midrule",
-                  r"\multicolumn{5}{@{}l}{\textit{Panel B: range over the six cells, by level of "
-                  r"the CDI}} \\"]
+                  r"\multicolumn{5}{@{}l}{\textit{Panel B: smallest and largest value over the six cells "
+                  r"of Panel A, by level of the CDI}} \\"]
         for cdi in CDI_LEVELS:
             g = rng[cdi]
             cells = [f"{fmt(g[k][0], d)} to {fmt(g[k][1], d)}" for k, d in
@@ -204,7 +204,8 @@ def render_md(df: pd.DataFrame, panel_b: bool) -> str:
                    f"{fmt(r['premium_pp'], DEC['premium_pp'])} | "
                    f"{fmt(r['premium_pct_cdi'], DEC['premium_pct_cdi'])} |")
     if panel_b:
-        out += ["", "Panel B: range over the six cells, by level of the CDI", "",
+        out += ["", "Panel B: smallest and largest value over the six cells of Panel A, by level of "
+                    "the CDI", "",
                 "| CDI (percent a year) | Cost per R$100 | Break-even premium (pp a year) | "
                 "Break-even premium (% of CDI) |", "|---|---|---|---|"]
         for cdi in CDI_LEVELS:

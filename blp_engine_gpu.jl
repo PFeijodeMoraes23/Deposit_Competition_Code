@@ -134,11 +134,16 @@ function dlns_dtheta(shares!, theta2::Vector{Float64}, buf, prod_vec, nu_draws, 
     return D
 end
 
+"""Singular blocks met by the last `exact_jacobian_from_dlns` call (read by `guarded_fg!`, b3)."""
+const LAST_JACOBIAN_SINGULAR = Ref(0)
+
 """The exact ∂δ*/∂θ₂ (`exact_delta_jacobian`) from ∂ln s/∂θ₂, with buf.mu at θ₂. Rows of a singular
 block (a market whose outside share has vanished at a far trial point) come back non-finite; they are
-set to zero, with a warning, so the optimizer's line search can still reject that point."""
+set to zero, with a warning, so the optimizer's line search can still reject that point. The count of
+singular blocks is left in `LAST_JACOBIAN_SINGULAR`."""
 function exact_jacobian_from_dlns(delta_star::Vector{Float64}, buf, dlns::Matrix{Float64}, pc::Precomp)
     Jδ, info = exact_delta_jacobian(delta_star, buf.mu, dlns, exact_groups(pc))
+    LAST_JACOBIAN_SINGULAR[] = info["n_singular_blocks"]
     bad = .!isfinite.(Jδ)
     if any(bad)
         println("  [!] exact IFT: $(count(any(bad; dims=2))) row(s) non-finite " *
@@ -702,6 +707,9 @@ function main()
                 haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
                 # The convergence report (fd_check_report), non-finite values as null.
                 haskey(res, "fd_check") && (json_out["fd_check"] = json_finite(res["fd_check"]))
+                # Why the outer solver stopped, for the chosen or single start (solve_box_lbfgsb's
+                # info: stop_reason, n_iter, n_evals, f_at_x, step, inner-guard counts).
+                haskey(res, "outer") && (json_out["outer"] = json_finite(res["outer"]))
                 haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
                     json_se_values(res["theta1_se_linear_iv"], "no joint", nothing))
                 # A start record (two-start stages; ext2 when it starts cold under the override),
@@ -1497,6 +1505,20 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         return nothing
     end
 
+    # b4 (BLP_INNER_CLAMP_TEST=1, blp_engine_cpu.jl `clamp_residual_stats`): at an exit, the coordinates
+    # the clamp holds are checked on their pre-clamp residual, from s_full (the shares of the last Tstep!,
+    # at its src). Returns true when a converged norm hides a clamped residual ≥ tol.
+    ctest = inner_clamp_test()
+    clamp_exit!(dest::CuVector{GPU_T}, kind::String, fe::Int) = begin
+        n_V = n_at_clamp(gbuf.V_B) + n_at_clamp(gbuf.V_D)
+        if kind == "converged"
+            n_at, n_bound, max_r = clamp_residual_stats(dest, s_full, ln_s_data, floor_s, tol)
+            record_clamp_exit!(kind, n_at, n_bound, max_r, n_V, fe, tol)
+        else
+            record_clamp_exit!(kind, n_at_clamp(dest), -1, NaN, n_V, fe, tol)
+        end
+    end
+
     # Finiteness guards are device reductions that sync a scalar to host. The
     # convergence norms (nm, nm2) and SQUAREM norms (norm_r_sq, norm_v_sq,
     # norm_prop) are needed EVERY step, but the isfinite guards on x1/x2 are not:
@@ -1521,6 +1543,7 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         Tstep!(x1, d_cur); fevals += 1
         if fevals % FINITE_CHECK_EVERY == 0 && !all(isfinite, x1)
             println("    [SQUAREM-GPU ABORT] non-finite at eval=$fevals")
+            ctest && clamp_exit!(d_cur, "nonfinite", fevals)
             copyto!(delta, Float64.(Array(d_cur)))
             return false, fevals, norm_history
         end
@@ -1530,11 +1553,15 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         (fevals % 50 == 0 || nm < tol) &&
             println("    [SQUAREM-GPU eval=$fevals/$max_iter] norm=$(round(nm, sigdigits=4))")
         if nm < tol
+            if ctest && clamp_exit!(x1, "converged", fevals)
+                copyto!(delta, Float64.(Array(x1))); return false, fevals, norm_history
+            end
             copyto!(delta, Float64.(Array(x1))); return true, fevals, norm_history
         end
 
         Tstep!(x2, x1); fevals += 1
         if fevals % FINITE_CHECK_EVERY == 0 && !all(isfinite, x2)
+            ctest && clamp_exit!(x1, "nonfinite", fevals)
             copyto!(delta, Float64.(Array(x1))); return false, fevals, norm_history
         end
         nm2 = Float64(maximum(abs, x2 .- x1))
@@ -1542,6 +1569,9 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         (fevals % 50 == 0 || nm2 < tol) &&
             println("    [SQUAREM-GPU eval=$fevals/$max_iter] norm=$(round(nm2, sigdigits=4))")
         if nm2 < tol
+            if ctest && clamp_exit!(x2, "converged", fevals)
+                copyto!(delta, Float64.(Array(x2))); return false, fevals, norm_history
+            end
             copyto!(delta, Float64.(Array(x2))); return true, fevals, norm_history
         end
 
@@ -1563,6 +1593,9 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
                     println("    [SQUAREM-GPU eval=$fevals/$max_iter] " *
                             "norm=$(round(nmb, sigdigits=4)) [picard-restart]")
                 if nmb < tol
+                    if ctest && clamp_exit!(d_cur, "converged", fevals)
+                        copyto!(delta, Float64.(Array(d_cur))); return false, fevals, norm_history
+                    end
                     copyto!(delta, Float64.(Array(d_cur))); return true, fevals, norm_history
                 end
             end
@@ -1587,6 +1620,7 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
             d_cur .= x_prop
         end
     end
+    ctest && clamp_exit!(d_cur, "cap", fevals)
     copyto!(delta, Float64.(Array(d_cur)))
     return false, fevals, norm_history
 end
@@ -2718,14 +2752,32 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     cache_t2    = fill(NaN, n_params)
     cache_Q     = Ref(0.0)
     cache_grad  = zeros(n_params)
+    log_status("  [OUTER] " * outer_knobs_note())
+    # b3 (BLP_INNER_GUARD=1, blp_engine_cpu.jl `guarded_fg!`): inside each solve (`guard_live`), every
+    # evaluation starts from the last converged δ and a failed one is scored instead of used.
+    guard      = inner_guard_on() ? InnerGuard(n_params, N_obs) : nothing
+    guard_live = Ref(false)
 
     function ift_compute_gpu!(t2::Vector{Float64})
         isequal(t2, cache_t2) && return
-        cache_Q[] = gmm_fg_gpu!(cache_grad, t2,
-                                 buf, gbuf, prod_vec, nu_draws,
-                                 sigma_indices, pi_interactions, R, coef_dim,
-                                 W, args["tol_inner"], args["max_inner"],
-                                 delta_work, pc)
+        cache_Q[] = if guard !== nothing && guard_live[]
+            guarded_fg!(cache_grad, t2, guard, delta_work,
+                (d, cap) -> (mu_at!(buf, prod_vec, nu_draws, t2, sigma_indices, pi_interactions, R, coef_dim);
+                             cr = blp_contraction_gpu!(buf, gbuf, d, pc, R; tol = args["tol_inner"],
+                                                       max_iter = cap);
+                             (cr[1], cr[2])),
+                d -> (gm = compute_gmm_moments(estimate_theta1(d, pc)[2], pc); (dot(gm, W * gm), gm)),
+                (G, gm, d) -> (compute_ift_gradient_gpu!(G, gm, d, t2, buf, gbuf, prod_vec, nu_draws,
+                                                         sigma_indices, pi_interactions, R, coef_dim, W, pc);
+                               LAST_JACOBIAN_SINGULAR[]);
+                cap = args["max_inner"], cap_first = reeval_cap(args))
+        else
+            gmm_fg_gpu!(cache_grad, t2,
+                        buf, gbuf, prod_vec, nu_draws,
+                        sigma_indices, pi_interactions, R, coef_dim,
+                        W, args["tol_inner"], args["max_inner"],
+                        delta_work, pc)
+        end
         outer_iter[] += 1
         outer_iter[] % 10 == 0 &&
             log_status("  [OUTER iter=$(outer_iter[])] Q=$(round(cache_Q[], sigdigits=6)) " *
@@ -2775,8 +2827,11 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         theta2_star, Q_min, n_outer, conv_outer, start_rec = solve_two_starts(
             (name, theta2_start) -> begin
                 fill!(cache_t2, NaN); outer_iter[] = 0     # a fresh one-point cache and log counter per start
-                solve_box_lbfgsb(f_obj, g_obj!, theta2_start, lo, hi;
-                                 tol_outer = args["tol_outer"], maxiter = 500)
+                guard === nothing || (guard_reset!(guard, delta_work); guard_live[] = true)
+                sol = solve_box_lbfgsb(f_obj, g_obj!, theta2_start, lo, hi;
+                                       tol_outer = args["tol_outer"], maxiter = 500)
+                guard_live[] = false
+                with_guard_record(sol, guard)
             end, starts, start_rec, delta_work;
             # Q is re-evaluated at each start's θ₂* (reeval_rule): the contraction, then the objective.
             contract  = t -> (mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim);
@@ -2788,6 +2843,10 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
                                           args["max_inner"], delta_work, pc)),
             reeval_note = reeval_rule(args))
         results[two_start_key(args["stage"])] = start_rec
+        let ch = get(start_rec, "chosen", "")
+            (haskey(start_rec, ch) && start_rec[ch] isa AbstractDict && haskey(start_rec[ch], "outer")) &&
+                (results["outer"] = start_rec[ch]["outer"])
+        end
     else
         init_seeded && haskey(TWO_START_STAGES, args["stage"]) &&
             (results[two_start_key(args["stage"])] = Dict{String,Any}(
@@ -2797,12 +2856,21 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             args["stage"], prev_stages[args["stage"]],
             joinpath(blp_dir(out_dir),
                      "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")))
-        theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
-            f_obj, g_obj!, theta2_0, lo, hi;
-            tol_outer = args["tol_outer"], maxiter = 500)
+        guard === nothing || (guard_reset!(guard, delta_work); guard_live[] = true)
+        sol = solve_box_lbfgsb(f_obj, g_obj!, theta2_0, lo, hi;
+                               tol_outer = args["tol_outer"], maxiter = 500)
+        guard_live[] = false
+        with_guard_record(sol, guard)
+        theta2_star, Q_min, n_outer, conv_outer = sol
+        length(sol) >= 6 && (results["outer"] = sol[6])
     end
 
     println("  Optimizer converged: $(conv_outer)")
+    haskey(results, "outer") &&
+        println("  Optimizer stop: $(get(results["outer"], "stop_reason", "?")) | iterations " *
+                "$(get(results["outer"], "n_iter", "?")) | evaluations $(get(results["outer"], "n_evals", "?"))" *
+                (get(results["outer"], "step", "off") == "off" ? "" :
+                    " | step $(results["outer"]["step"]); Q at θ₂* $(get(results["outer"], "f_at_x", "?"))"))
     println("  Q(θ₂*) = $(round(Q_min, sigdigits=6))")
     println("  theta2* = $theta2_star")
 
@@ -3029,6 +3097,9 @@ function main_gpu_ift()
                 haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
                 # The convergence report (fd_check_report), non-finite values as null.
                 haskey(res, "fd_check") && (json_out["fd_check"] = json_finite(res["fd_check"]))
+                # Why the outer solver stopped, for the chosen or single start (solve_box_lbfgsb's
+                # info: stop_reason, n_iter, n_evals, f_at_x, step, inner-guard counts).
+                haskey(res, "outer") && (json_out["outer"] = json_finite(res["outer"]))
                 haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
                     json_se_values(res["theta1_se_linear_iv"], "no joint", nothing))
                 # A start record (two-start stages; ext2 when it starts cold under the override),

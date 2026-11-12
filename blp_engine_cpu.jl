@@ -59,9 +59,259 @@ end
 HAVE_LBFGSB || @warn "LBFGSB.jl not installed — box-constrained outer optimisation " *
     "will use Optim's Fminbox(LBFGS()). Run `Pkg.add(\"LBFGSB\")` for true L-BFGS-B."
 
+# ── Outer-solver knobs (engine edit (b), 2026-11-11) ────────────────────────────
+# Read at call time, like BLP_FD_CHECK, so a job gets them through `sbatch --export=ALL`; each is
+# also a keyword of `solve_box_lbfgsb`. The defaults reproduce the runs made before the edit.
+"""BLP_OUTER_STOP_REASON (default 1; 0 = the `LBFGSB.lbfgsb` call): `solve_box_lbfgsb` drives L-BFGS-B
+through `_lbfgsb_loop`, which keeps the stop message, the iteration count and f at the returned x."""
+outer_stop_reason()::Bool = get(ENV, "BLP_OUTER_STOP_REASON", "1") != "0"
+
+"""BLP_OUTER_STEP: `off` (default), `lite` or `full`, the first-step control of `solve_box_lbfgsb`."""
+function outer_step_mode()::Symbol
+    v = lowercase(strip(get(ENV, "BLP_OUTER_STEP", "off")))
+    v in ("off", "lite", "full") || error("BLP_OUTER_STEP='$v' is not off, lite or full")
+    return Symbol(v)
+end
+"""BLP_OUTER_R0 (default 0.02): under `lite` the largest move of any coordinate at the first trial;
+under `full` the first radius of the moving box."""
+outer_r0()::Float64   = parse(Float64, get(ENV, "BLP_OUTER_R0",   "0.02"))
+"""BLP_OUTER_RMAX (default 1.0): the largest radius of the moving box (`full`)."""
+outer_rmax()::Float64 = parse(Float64, get(ENV, "BLP_OUTER_RMAX", "1.0"))
+"""BLP_OUTER_RMIN (default 1e-4): a `full` solve ends when its radius halves below this."""
+outer_rmin()::Float64 = parse(Float64, get(ENV, "BLP_OUTER_RMIN", "1e-4"))
+
+"""The outer and inner knobs in force, one line for the log."""
+outer_knobs_note() = "stop reason $(outer_stop_reason() ? "on" : "off") | step $(outer_step_mode())" *
+    (outer_step_mode() == :off ? "" : " (r0 $(outer_r0())" *
+        (outer_step_mode() == :full ? ", rmax $(outer_rmax()), rmin $(outer_rmin()))" : ")")) *
+    " | inner guard $(inner_guard_on() ? "on" : "off") | clamp test $(inner_clamp_test() ? "on" : "off")"
+
+# L-BFGS-B's stopping tolerances and evaluation cap: the defaults of LBFGSB.jl 0.4.1 (wrapper.jl l.32),
+# passed explicitly.
+const LBFGSB_FACTR  = 1e7
+const LBFGSB_PGTOL  = 1e-5
+const LBFGSB_MAXFUN = 15000
+
+"""Bound type of one coordinate as LBFGSB.jl's `typ_bnd`: 0 free, 1 lower only, 2 both, 3 upper only."""
+function _lbfgsb_bound_type(l::Float64, u::Float64)::Int
+    l > u && error("Inconsistent bounds")
+    lbinf = l == -Inf
+    ubinf = u == +Inf
+    lbinf && ubinf && return 0
+    !lbinf && ubinf && return 1
+    !lbinf && !ubinf && return 2
+    return 3
+end
+
 """
-    solve_box_lbfgsb(f, g!, x0, lo, hi; tol_outer=1e-6, maxiter=500, m=10)
-        -> (minimizer::Vector, minimum::Float64, n_feval::Int, converged::Bool)
+    _lbfgsb_loop(f, g!, x0, lo, hi; m, factr, pgtol, maxiter, maxfun, scale_r0 = nothing) -> NamedTuple
+
+The loop of LBFGSB.jl 0.4.1's `L_BFGS_B` call operator (wrapper.jl l.31–73), written out so that the
+stop message survives. It makes the same `setulb` calls with the same arguments in the same order, so
+with `scale_r0 = nothing` its iterates are those of `LBFGSB.lbfgsb(f, g!, x0; lb = lo, ub = hi, m,
+factr, pgtol, maxiter, maxfun)` bit for bit (diagnostics/test_solve_box.jl checks it).
+
+Returns
+  x        L-BFGS-B's x on return: the last accepted iterate (after `ABNORMAL_TERMINATION_IN_LNSRCH`
+           it restores the iterate the failed line search started from);
+  f_last   the last f requested, what `LBFGSB.lbfgsb` returns (after an abnormal stop it belongs to the
+           last rejected trial, not to x);
+  f_at_x, g_at_x   f and ∇f at x, from the evaluation that produced x (NaN if none matches x);
+  f_start, g_start f and ∇f at the first point evaluated;
+  task     the stop message; n_iter (`isave[30]`); n_fg (`isave[34]`); scale (c, 1 unscaled).
+
+`scale_r0 = r` (BLP_OUTER_STEP=lite): f and ∇f at x0 projected on the box are evaluated first and
+reused as L-BFGS-B's first evaluation. L-BFGS-B then minimises c·f, c = min(1, r / max_i abs(∇f_i))
+over the coordinates not held at a bound by their derivative, so its first trial point
+P(x0 − c∇f) moves no coordinate by more than r; pgtol and factr are multiplied by c, which keeps
+the stop tests in f units (identical when abs(f) ≤ 1, stricter otherwise). From the first curvature
+pair on, the quasi-Newton steps do not depend on c. All values returned are in f units.
+"""
+function _lbfgsb_loop(f, g!, x0::Vector{Float64}, lo::Vector{Float64}, hi::Vector{Float64};
+                      m::Int = 10, factr::Float64 = LBFGSB_FACTR, pgtol::Float64 = LBFGSB_PGTOL,
+                      maxiter::Int = 500, maxfun::Int = LBFGSB_MAXFUN,
+                      scale_r0::Union{Nothing,Float64} = nothing)
+    n   = length(x0)
+    opt = Base.invokelatest(LBFGSB.L_BFGS_B, n, m)
+    x   = copy(x0)
+    fl  = 0.0                                   # the f handed to setulb (scaled), as the wrapper's `f`
+    fill!(opt.task, Cuchar(' ')); fill!(opt.csave, Cuchar(' ')); fill!(opt.lsave, zero(Cint))
+    fill!(opt.isave, zero(Cint)); fill!(opt.dsave, zero(Cdouble)); fill!(opt.wa, zero(Cdouble))
+    fill!(opt.iwa, zero(Cint)); fill!(opt.g, zero(Cdouble)); fill!(opt.nbd, zero(Cint))
+    fill!(opt.l, zero(Cdouble)); fill!(opt.u, zero(Cdouble))
+    @inbounds for i in 1:n
+        opt.nbd[i] = _lbfgsb_bound_type(lo[i], hi[i])
+        opt.l[i]   = lo[i]
+        opt.u[i]   = hi[i]
+    end
+    c = 1.0; pre = nothing
+    f_start = NaN; g_start = fill(NaN, n)
+    if scale_r0 !== nothing
+        xp = clamp.(x0, lo, hi)                 # where L-BFGS-B evaluates first (its `active` projection)
+        fp = Float64(f(xp)); gp = zeros(n); g!(gp, xp)
+        gmax = 0.0
+        @inbounds for i in 1:n
+            held = (xp[i] <= lo[i] && gp[i] > 0) || (xp[i] >= hi[i] && gp[i] < 0)
+            held || (gmax = max(gmax, abs(gp[i])))
+        end
+        (isfinite(gmax) && gmax > scale_r0) && (c = scale_r0 / gmax)
+        pre = (xp, fp, gp)
+    end
+    factr_c = c == 1.0 ? factr : c * factr
+    pgtol_c = c == 1.0 ? pgtol : c * pgtol
+    x_last = fill(NaN, n); f_lastv = NaN; g_last = fill(NaN, n)     # the last evaluation (f units)
+    x_acc  = fill(NaN, n); f_acc   = NaN; g_acc  = fill(NaN, n)     # the last accepted iterate
+    n_fg_calls = 0
+    opt.task[1:5] = b"START"
+    while true
+        Base.invokelatest(LBFGSB.setulb, n, m, x, opt.l, opt.u, opt.nbd, fl, opt.g, factr_c, pgtol_c,
+                          opt.wa, opt.iwa, opt.task, -1, opt.csave, opt.lsave, opt.isave, opt.dsave)
+        if opt.task[1:2] == b"FG"
+            n_fg_calls += 1
+            if n_fg_calls == 1 && pre !== nothing && isequal(x, pre[1])
+                fv = pre[2]; copyto!(opt.g, pre[3])
+            else
+                fv = f(x)
+                g!(opt.g, x)
+            end
+            copyto!(x_last, x); f_lastv = Float64(fv); copyto!(g_last, opt.g)
+            if n_fg_calls == 1
+                f_start = f_lastv; copyto!(g_start, g_last)
+                copyto!(x_acc, x); f_acc = f_lastv; copyto!(g_acc, g_last)   # the initial iterate
+            end
+            if c == 1.0
+                fl = fv
+            else
+                fl = c * fv
+                opt.g .*= c
+            end
+        elseif opt.task[1:5] == b"NEW_X"
+            copyto!(x_acc, x)
+            if isequal(x, x_last)
+                f_acc = f_lastv; copyto!(g_acc, g_last)
+            else
+                f_acc = NaN; fill!(g_acc, NaN)
+            end
+            if opt.isave[30] ≥ maxiter
+                opt.task[1:43] = b"STOP: TOTAL NO. of ITERATIONS REACHED LIMIT"
+            elseif opt.isave[34] ≥ maxfun
+                opt.task[1:52] = b"STOP: TOTAL NO. of f AND g EVALUATIONS EXCEEDS LIMIT"
+            end
+        else
+            break
+        end
+    end
+    f_at_x, g_at_x = if isequal(x, x_acc)
+        f_acc, copy(g_acc)
+    elseif isequal(x, x_last)
+        f_lastv, copy(g_last)
+    else
+        NaN, fill(NaN, n)
+    end
+    return (x = x, f_last = f_lastv, f_at_x = f_at_x, g_at_x = g_at_x,
+            f_start = f_start, g_start = g_start,
+            task = String(strip(String(copy(opt.task)))),
+            line_search = String(strip(String(copy(opt.csave)))),
+            n_iter = Int(opt.isave[30]), n_fg = Int(opt.isave[34]), scale = c)
+end
+
+"""True when x sits on a face of the moving box [lo_k, hi_k] that is not a face of the box [lo, hi]
+and the derivative there points out of the moving box (a non-finite derivative counts as outward)."""
+function _on_moving_face(x::Vector{Float64}, g::Vector{Float64}, lo_k::Vector{Float64},
+                         hi_k::Vector{Float64}, lo::Vector{Float64}, hi::Vector{Float64})::Bool
+    @inbounds for i in eachindex(x)
+        out_lo = !isfinite(g[i]) || g[i] > 0
+        out_hi = !isfinite(g[i]) || g[i] < 0
+        (x[i] <= lo_k[i] && lo_k[i] > lo[i] && out_lo) && return true
+        (x[i] >= hi_k[i] && hi_k[i] < hi[i] && out_hi) && return true
+    end
+    return false
+end
+
+"""
+    _lbfgsb_moving_box(f, g!, x0, lo, hi, fcount; m, factr, pgtol, maxiter, r0, rmax, rmin) -> NamedTuple
+
+BLP_OUTER_STEP=full: L-BFGS-B in a moving box [θ_k − r, θ_k + r] ∩ [lo, hi], each round a
+`_lbfgsb_loop` lite-scaled with r0 = r, so no round's first trial moves a coordinate by more than r.
+After a round:
+  - a failed round — no progress (f not below its start by L-BFGS-B's own factr·ε test) and either an
+    ABNORMAL stop or a line search that gave up (dcsrch WARNING: L-BFGS-B then re-takes the round's
+    start as its iterate and stops on the f test, f having risen): θ stays, r halves; the solve ends
+    after two such rounds in a row or when r < rmin;
+  - progress, but an ABNORMAL stop or a line search that gave up: restart at its point, same r;
+  - converged on a face of the moving box whose derivative points out of it: restart there with
+    r ← min(2r, rmax);
+  - converged inside the moving box (every binding face is a face of the box): the end;
+  - L-BFGS-B's STOP/ERROR, or `fcount[] ≥ maxiter` (the caller's evaluation budget): the end.
+Returns x and f, ∇f at x (f units), the last round's stop message (`task`), the iterations summed
+over rounds, one Dict per round, and why the solve ended (`end_note`).
+"""
+function _lbfgsb_moving_box(f, g!, x0::Vector{Float64}, lo::Vector{Float64}, hi::Vector{Float64},
+                            fcount::Base.RefValue{Int};
+                            m::Int = 10, factr::Float64 = LBFGSB_FACTR, pgtol::Float64 = LBFGSB_PGTOL,
+                            maxiter::Int = 500, r0::Float64 = 0.02, rmax::Float64 = 1.0,
+                            rmin::Float64 = 1e-4)
+    n  = length(x0)
+    θ  = clamp.(x0, lo, hi)
+    fθ = NaN; gθ = fill(NaN, n); f_first = NaN
+    r  = r0
+    rounds = Dict{String,Any}[]
+    iters = 0; noprog = 0; task = ""; line_search = ""; end_note = ""
+    while true
+        lo_k = max.(lo, θ .- r)
+        hi_k = min.(hi, θ .+ r)
+        res = _lbfgsb_loop(f, g!, θ, lo_k, hi_k; m = m, factr = factr, pgtol = pgtol,
+                           maxiter = max(1, maxiter - iters),
+                           maxfun = max(1, LBFGSB_MAXFUN - fcount[]), scale_r0 = r)
+        iters += res.n_iter
+        task   = res.task
+        line_search = res.line_search
+        isfinite(f_first) || (f_first = res.f_start)
+        isfinite(fθ) || (fθ = res.f_start; copyto!(gθ, res.g_start))
+        f0 = res.f_start; f1 = res.f_at_x
+        tolp = factr * eps(Float64) * max(abs(f0), abs(f1), 1.0)
+        progress = isfinite(f0) && isfinite(f1) && f1 < f0 - tolp
+        gave_up  = startswith(task, "ABNORMAL") || startswith(line_search, "WARNING")
+        failed   = !progress && (gave_up || !(f1 <= f0))
+        face = !failed && !gave_up && _on_moving_face(res.x, res.g_at_x, lo_k, hi_k, lo, hi)
+        push!(rounds, Dict{String,Any}("r" => r, "stop_reason" => task, "line_search" => line_search,
+                                       "n_iter" => res.n_iter, "f_start" => f0, "f_end" => f1,
+                                       "progress" => progress, "failed" => failed, "on_moving_face" => face,
+                                       "scale" => res.scale, "evals_after" => fcount[]))
+        log_status("  [OUTER full] round $(length(rounds)): r $(round(r, sigdigits = 3)) | $task" *
+                   (isempty(line_search) ? "" : " (line search: $line_search)") * " | " *
+                   "Q $(round(f0, sigdigits = 8)) -> $(round(f1, sigdigits = 8)) | " *
+                   (failed ? "failed" : face ? "on the moving box" : "inside") * " | evals $(fcount[])")
+        if !failed && isfinite(f1)
+            θ = copy(res.x); fθ = f1; gθ = copy(res.g_at_x)
+        end
+        if fcount[] >= maxiter
+            end_note = "evaluation budget ($maxiter) spent"; break
+        elseif startswith(task, "STOP") || startswith(task, "ERROR")
+            end_note = "L-BFGS-B: $task"; break
+        elseif failed
+            noprog += 1; r /= 2
+            noprog >= 2 && (end_note = "two rounds in a row without progress"; break)
+            r < rmin && (end_note = "radius below rmin ($rmin)"; break)
+            continue
+        end
+        noprog = 0
+        gave_up && continue          # progress, but the last line search gave up: restart there, same r
+        if face
+            r = min(2r, rmax)
+            continue
+        end
+        end_note = "converged inside the moving box"
+        break
+    end
+    return (x = θ, f_at_x = fθ, g_at_x = gθ, f_start = f_first, task = task,
+            line_search = line_search, n_iter = iters, rounds = rounds, end_note = end_note)
+end
+
+"""
+    solve_box_lbfgsb(f, g!, x0, lo, hi; tol_outer=1e-6, maxiter=500, m=10, factr, pgtol,
+                     stop_reason, step, r0, rmax, rmin)
+        -> (minimizer, minimum, n_feval, converged, n_evals, info)
 
 Bound-constrained outer minimisation. Prefers true L-BFGS-B (LBFGSB.jl); falls back
 LOUDLY to `Fminbox(LBFGS())` if LBFGSB is unavailable or its call errors / returns an
@@ -72,12 +322,25 @@ fewer f/∇f evaluations by handling the box natively instead of via barrier sub
 share a one-point cache between `f` and `g!` so the inner BLP contraction is solved
 once per unique `x` (the IFT and numerical engines both do).
 
-`converged` is a conservative proxy: `true` only if it stopped in < maxiter f-evals.
+`converged` is a conservative proxy: `true` only if it stopped in < maxiter f-evals. It does not say
+why L-BFGS-B stopped: `info["stop_reason"]` does (`stop_reason = true`, BLP_OUTER_STOP_REASON, the
+default), e.g. `ABNORMAL_TERMINATION_IN_LNSRCH` for a line search that failed. With `step = :off` the
+first four values are those of the `LBFGSB.lbfgsb` call; `minimum` is the last f L-BFGS-B requested,
+which after an abnormal stop belongs to a rejected trial (`info["f_at_x"]` is f at the minimizer).
+`step = :lite` / `:full` (BLP_OUTER_STEP, `_lbfgsb_loop`, `_lbfgsb_moving_box`) bound the first
+trial's length and return f at the minimizer. `n_evals` equals `n_feval` (the count of f calls), as
+callers that read a fifth value expect. `factr`/`pgtol` are L-BFGS-B's own tolerances; `tol_outer`
+is read only by the Fminbox fallback.
 """
 function solve_box_lbfgsb(f, g!, x0::Vector{Float64},
                           lo::Vector{Float64}, hi::Vector{Float64};
-                          tol_outer::Float64=1e-6, maxiter::Int=500, m::Int=10)
+                          tol_outer::Float64=1e-6, maxiter::Int=500, m::Int=10,
+                          factr::Float64=LBFGSB_FACTR, pgtol::Float64=LBFGSB_PGTOL,
+                          stop_reason::Bool=outer_stop_reason(), step::Symbol=outer_step_mode(),
+                          r0::Float64=outer_r0(), rmax::Float64=outer_rmax(), rmin::Float64=outer_rmin())
     n = length(x0)
+    step in (:off, :lite, :full) || error("solve_box_lbfgsb: step = $step is not :off, :lite or :full")
+    use_loop = stop_reason || step != :off
     if HAVE_LBFGSB
         fcount = Ref(0)
         f_c(x)     = (fcount[] += 1; f(x))
@@ -86,20 +349,61 @@ function solve_box_lbfgsb(f, g!, x0::Vector{Float64},
         # returned shape so a wrong return-order can't silently corrupt the result.
         for attempt in 1:2
             try
-                fmin, xmin = if attempt == 1                      # high-level convenience
-                    Base.invokelatest(LBFGSB.lbfgsb, f_c, g_c!, x0;
-                        lb=lo, ub=hi, maxiter=maxiter)
-                else                                             # low-level callable + bounds matrix
-                    bounds = zeros(3, n)
-                    @inbounds for i in 1:n
-                        bounds[1, i] = 2.0; bounds[2, i] = lo[i]; bounds[3, i] = hi[i]
+                if use_loop
+                    # b1/b2: the setulb loop, which keeps L-BFGS-B's stop message.
+                    r = if step == :full
+                        _lbfgsb_moving_box(f_c, g_c!, x0, lo, hi, fcount; m = m, factr = factr,
+                                           pgtol = pgtol, maxiter = maxiter, r0 = r0, rmax = rmax,
+                                           rmin = rmin)
+                    else
+                        _lbfgsb_loop(f_c, g_c!, x0, lo, hi; m = m, factr = factr, pgtol = pgtol,
+                                     maxiter = maxiter, scale_r0 = step == :lite ? r0 : nothing)
                     end
-                    opt = Base.invokelatest(LBFGSB.L_BFGS_B, n, m)
-                    Base.invokelatest(opt, f_c, g_c!, x0, bounds; maxiter=maxiter)
-                end
-                if xmin isa AbstractVector && length(xmin) == n && isfinite(Float64(fmin))
-                    return (collect(Float64, xmin), Float64(fmin),
-                            fcount[], fcount[] < maxiter)
+                    fret = step == :off ? r.f_last : r.f_at_x
+                    if r.x isa AbstractVector && length(r.x) == n && isfinite(Float64(fret))
+                        # A start that "froze" shows here whatever the stop message says: moved 0
+                        # (x is the start, bit for bit) and, when a line search gave up after
+                        # setting its step back to 0, f_at_x above f_start.
+                        info = Dict{String,Any}(
+                            "solver" => "L-BFGS-B (setulb loop)", "attempt" => attempt,
+                            "stop_reason" => r.task, "line_search" => r.line_search,
+                            "n_iter" => r.n_iter, "n_evals" => fcount[],
+                            "f_start" => r.f_start, "f_at_x" => r.f_at_x,
+                            "moved" => maximum(abs.(r.x .- clamp.(x0, lo, hi)); init = 0.0),
+                            "step" => String(step),
+                            "factr" => factr, "pgtol" => pgtol, "maxiter" => maxiter)
+                        if step == :full
+                            info["rounds"] = r.rounds; info["end_note"] = r.end_note
+                            info["r0"] = r0; info["rmax"] = rmax; info["rmin"] = rmin
+                        else
+                            info["f_last"] = r.f_last; info["n_fg_lbfgsb"] = r.n_fg
+                            step == :lite && (info["scale"] = r.scale; info["r0"] = r0)
+                        end
+                        return (collect(Float64, r.x), Float64(fret),
+                                fcount[], fcount[] < maxiter, fcount[], info)
+                    end
+                else
+                    fmin, xmin = if attempt == 1                      # high-level convenience
+                        Base.invokelatest(LBFGSB.lbfgsb, f_c, g_c!, x0;
+                            lb=lo, ub=hi, maxiter=maxiter, factr=factr, pgtol=pgtol)
+                    else                                             # low-level callable + bounds matrix
+                        bounds = zeros(3, n)
+                        @inbounds for i in 1:n
+                            bounds[1, i] = 2.0; bounds[2, i] = lo[i]; bounds[3, i] = hi[i]
+                        end
+                        opt = Base.invokelatest(LBFGSB.L_BFGS_B, n, m)
+                        Base.invokelatest(opt, f_c, g_c!, x0, bounds; maxiter=maxiter,
+                                          factr=factr, pgtol=pgtol)
+                    end
+                    if xmin isa AbstractVector && length(xmin) == n && isfinite(Float64(fmin))
+                        return (collect(Float64, xmin), Float64(fmin),
+                                fcount[], fcount[] < maxiter, fcount[],
+                                Dict{String,Any}("solver" => "L-BFGS-B (LBFGSB.lbfgsb)",
+                                    "attempt" => attempt, "n_evals" => fcount[], "step" => "off",
+                                    "stop_reason" => "not recorded (BLP_OUTER_STOP_REASON=0)",
+                                    "n_iter" => nothing, "factr" => factr, "pgtol" => pgtol,
+                                    "maxiter" => maxiter))
+                    end
                 end
             catch e
                 attempt == 2 && @warn "L-BFGS-B (LBFGSB.jl) call failed — falling back " *
@@ -110,7 +414,12 @@ function solve_box_lbfgsb(f, g!, x0::Vector{Float64},
     res = optimize(f, g!, lo, hi, x0, Fminbox(LBFGS()),
                    Optim.Options(iterations=maxiter, f_reltol=tol_outer, show_trace=false))
     return (Optim.minimizer(res), Optim.minimum(res),
-            Optim.iterations(res), Optim.converged(res))
+            Optim.iterations(res), Optim.converged(res), Optim.iterations(res),
+            Dict{String,Any}("solver" => "Fminbox(LBFGS()) fallback",
+                             "stop_reason" => "Fminbox fallback (Optim converged = $(Optim.converged(res)))",
+                             "n_iter" => Optim.iterations(res), "n_evals" => Optim.f_calls(res),
+                             "f_at_x" => Optim.minimum(res), "step" => "off",
+                             "factr" => nothing, "pgtol" => nothing, "maxiter" => maxiter))
 end
 
 # ── Set BLAS threads ────────────────────────────────────────────────────────
@@ -512,9 +821,11 @@ end
         -> (theta2_star, Q_min, n_outer, converged, record)
 
 Runs `solve_from(name, θ₀)` from each start of `two_start_list`, in order. `solve_from` is one bounded
-minimisation that returns (θ₂*, Q, n_outer, converged[, n_evals]) and leaves its last δ in
+minimisation that returns (θ₂*, Q, n_outer, converged[, n_evals[, info]]) and leaves its last δ in
 `delta_work`; n_evals defaults to n_outer (on the L-BFGS-B path n_outer already counts objective
-evaluations). Each start's δ₀, or the δ the stage loaded, is copied into `delta_work` before it runs.
+evaluations). `info`, the Dict `solve_box_lbfgsb` returns sixth, goes into the start's record as
+"outer", with its "stop_reason" and "n_iter" also at the record's top level. Each start's δ₀, or the
+δ the stage loaded, is copied into `delta_work` before it runs.
 
 After each start its Q is re-evaluated at its θ₂*: `contract(θ₂*)` sets μ and runs the inner
 contraction from that start's last δ to the re-evaluation tolerance (`reeval_tol`, `reeval_cap`) and
@@ -543,6 +854,7 @@ function solve_two_starts(solve_from::Function, starts, record::Dict{String,Any}
         sol = solve_from(name, copy(th0))
         t, Q_opt, n_outer, conv = sol[1], sol[2], sol[3], sol[4]
         n_evals = length(sol) >= 5 ? sol[5] : n_outer
+        info    = length(sol) >= 6 ? sol[6] : nothing
         reeval_conv = contract(t)
         Q = objective(t)
         ends[name] = copy(delta_work)
@@ -552,9 +864,16 @@ function solve_two_starts(solve_from::Function, starts, record::Dict{String,Any}
                                         "Q" => Q, "reeval_converged" => reeval_conv,
                                         "n_outer" => n_outer, "n_evals" => n_evals,
                                         "converged" => conv, "delta_start" => d0_note)
+        if info isa AbstractDict
+            record[name]["stop_reason"] = get(info, "stop_reason", nothing)
+            record[name]["n_iter"]      = get(info, "n_iter", nothing)
+            record[name]["outer"]       = info
+        end
         log_status("  [TWO-START] start '$name' done: Q_opt = $(round(Q_opt, sigdigits=8)) | " *
                    "Q_reeval = $(round(Q, sigdigits=8)) (inner converged = $reeval_conv) | " *
-                   "evals = $n_evals | converged = $conv | theta2* = $(round.(t, digits=4))")
+                   "evals = $n_evals | converged = $conv | theta2* = $(round.(t, digits=4))" *
+                   (info isa AbstractDict ? " | stop = $(get(info, "stop_reason", "?")), " *
+                                            "iterations $(get(info, "n_iter", "?"))" : ""))
     end
     order = String[s[1] for s in starts]
     pool  = String[n for n in order if isfinite(sols[n][2]) && sols[n][5]]
@@ -618,6 +937,114 @@ reeval_tol(args) = args["tol_inner"] / 10
 reeval_cap(args) = 10 * args["max_inner"]
 reeval_rule(args) = "inner contraction from each start's last δ to tol $(reeval_tol(args)) with at " *
                     "most $(reeval_cap(args)) iterations"
+
+# ── Inner-loop guard (engine edit (b), piece b3) ─────────────────────────────────
+"""BLP_INNER_GUARD (default 0): the GPU IFT objective runs through `guarded_fg!`."""
+inner_guard_on()::Bool = get(ENV, "BLP_INNER_GUARD", "0") == "1"
+
+"""
+State of `guarded_fg!` for one start: the last converged δ (`delta_good`), the last good evaluation
+(θ, Q, ∇Q) that a failed one is scored against, whether the next evaluation is the start's first, and
+counts: evaluations, failures, failures that were b4's clamp-bound stop, failures from a singular
+block, and whether the first evaluation failed.
+"""
+mutable struct InnerGuard
+    delta_good   ::Vector{Float64}
+    theta_ref    ::Vector{Float64}
+    g_ref        ::Vector{Float64}
+    Q_ref        ::Float64
+    have_ref     ::Bool
+    first        ::Bool
+    n_eval       ::Int
+    n_fail       ::Int
+    n_clamp_bound::Int
+    n_singular   ::Int
+    first_failed ::Bool
+end
+InnerGuard(n_params::Int, N::Int) = InnerGuard(zeros(N), zeros(n_params), zeros(n_params), NaN,
+                                               false, true, 0, 0, 0, 0, false)
+
+"""A fresh guard state for a start whose δ₀ is `delta_start` (copied)."""
+function guard_reset!(gd::InnerGuard, delta_start::AbstractVector{Float64})
+    copyto!(gd.delta_good, delta_start)
+    gd.have_ref = false; gd.Q_ref = NaN; gd.first = true
+    gd.n_eval = 0; gd.n_fail = 0; gd.n_clamp_bound = 0; gd.n_singular = 0; gd.first_failed = false
+    return gd
+end
+
+"""The guard's counts, as a start record carries them."""
+guard_record(gd::InnerGuard) = Dict{String,Any}("n_eval" => gd.n_eval, "n_fail" => gd.n_fail,
+    "n_clamp_bound" => gd.n_clamp_bound, "n_singular" => gd.n_singular,
+    "first_eval_failed" => gd.first_failed)
+
+"""`sol`, a `solve_box_lbfgsb` return, with the guard's counts added to its info Dict as "inner_guard"
+(unchanged when there is no guard)."""
+function with_guard_record(sol, gd)
+    (gd === nothing || length(sol) < 6 || !(sol[6] isa AbstractDict)) && return sol
+    sol[6]["inner_guard"] = guard_record(gd)
+    return sol
+end
+
+"""The value a failed evaluation at θ returns: the last good Q plus twice the change its gradient
+predicts for the step from its point, plus 1e-8·max(1, abs(Q)); 1e10 before any good evaluation."""
+function guard_fail_value(gd::InnerGuard, theta2::AbstractVector{Float64})::Float64
+    gd.have_ref || return 1e10
+    return gd.Q_ref + 2 * abs(dot(gd.g_ref, theta2 .- gd.theta_ref)) + 1e-8 * max(1.0, abs(gd.Q_ref))
+end
+
+"""
+    guarded_fg!(G, theta2, gd, delta, contract!, objective, gradient!; cap, cap_first) -> Q
+
+One objective-and-gradient evaluation under the inner-loop guard (BLP_INNER_GUARD=1):
+  1. δ starts from `gd.delta_good`, the last converged δ, not from the previous trial's δ;
+  2. `contract!(delta, max_iter) -> (converged, iterations)` sets μ at θ₂ and runs the inner loop in
+     place, with `cap_first` iterations at the start's first evaluation and `cap` after it;
+  3. if it converged with a finite δ: `objective(delta) -> (Q, g_moments)`, then
+     `gradient!(G, g_moments, delta) -> n_singular_blocks`;
+  4. the evaluation fails when the contraction did not converge (b4's clamp-bound stop included),
+     δ, Q or ∇Q is not finite, or the exact Jacobian met a singular block. A failure skips what is
+     left of 3, restores δ to `delta_good`, fills G with zeros and returns `guard_fail_value`.
+A good evaluation becomes the reference and its δ the new `delta_good`. When every contraction
+converges without a singular block, δ, Q and ∇Q are those of the unguarded evaluation bit for bit.
+"""
+function guarded_fg!(G::AbstractVector{Float64}, theta2::Vector{Float64}, gd::InnerGuard,
+                     delta::Vector{Float64}, contract!::Function, objective::Function,
+                     gradient!::Function; cap::Int, cap_first::Int)::Float64
+    copyto!(delta, gd.delta_good)
+    first = gd.first
+    gd.first = false
+    gd.n_eval += 1
+    conv, it = contract!(delta, first ? cap_first : cap)
+    clamp_bound = inner_clamp_test() && get(CLAMP_STATS[], "exit", "") == "clamp_bound"
+    ok = conv && all(isfinite, delta)
+    Q = NaN; nsing = 0; why = ok ? "" : (clamp_bound ? "clamp-bound" : "not converged in $it")
+    if ok
+        Q, gm = objective(delta)
+        ok = isfinite(Q)
+        ok || (why = "Q not finite")
+        if ok
+            nsing = gradient!(G, gm, delta)
+            ok = nsing == 0 && all(isfinite, G)
+            ok || (why = nsing > 0 ? "$nsing singular block(s)" : "gradient not finite")
+        end
+    end
+    if ok
+        copyto!(gd.delta_good, delta)
+        copyto!(gd.theta_ref, theta2); copyto!(gd.g_ref, G); gd.Q_ref = Q; gd.have_ref = true
+        return Q
+    end
+    gd.n_fail += 1
+    clamp_bound && (gd.n_clamp_bound += 1)
+    nsing > 0 && (gd.n_singular += 1)
+    first && (gd.first_failed = true)
+    copyto!(delta, gd.delta_good)
+    fill!(G, 0.0)
+    Qf = guard_fail_value(gd, theta2)
+    log_status("  [INNER-GUARD] evaluation $(gd.n_eval) failed ($why) at theta2 = " *
+               "$(round.(theta2, digits = 4)): Q = $(round(Qf, sigdigits = 8)) returned, gradient " *
+               "zero, δ back to the last converged one")
+    return Qf
+end
 
 """
     require_prev_checkpoint(stage, prev_stage, prev_path) -> Dict
@@ -1018,6 +1445,49 @@ end
 # ==========================================================================
 # 5. SQUAREM BLP Contraction — in-place
 # ==========================================================================
+# ── Clamp-aware convergence test (engine edit (b), piece b4) ─────────────────────
+"""BLP_INNER_CLAMP_TEST (default 0): the contractions also test the coordinates held at the ±500 clamp."""
+inner_clamp_test()::Bool = get(ENV, "BLP_INNER_CLAMP_TEST", "0") == "1"
+
+"""What the last contraction met at the ±500 clamp, set only under BLP_INNER_CLAMP_TEST=1: "exit"
+(converged | clamp_bound | cap | nonfinite), "n_delta_at_clamp" (δ coordinates at ±500 on exit),
+"n_bound" (those whose pre-clamp residual is ≥ tol; -1 when not computed), "max_resid_at_clamp",
+"n_V_at_clamp" (utility entries V = δ + μ at ±500 in the last share computation) and "iterations"."""
+const CLAMP_STATS = Ref{Dict{String,Any}}(Dict{String,Any}())
+
+"""
+    clamp_residual_stats(dest, s_model, ln_s_data, floor_s, tol) -> (n_at, n_bound, max_resid)
+
+Over the coordinates of `dest` = T(src) that the ±500 clamp holds (abs(dest_i) ≥ 500): how many there
+are, how many have a pre-clamp residual abs(ln s_data_i − ln max(s_model_i, floor_s)) ≥ tol (s_model
+the shares at src), and the largest such residual. The same code runs on CPU and GPU vectors.
+"""
+function clamp_residual_stats(dest::AbstractVector, s_model::AbstractVector, ln_s_data::AbstractVector,
+                              floor_s, tol::Float64)
+    n_at = mapreduce(x -> abs(x) >= 500 ? 1 : 0, +, dest; init = 0)
+    n_at == 0 && return (0, 0, 0.0)
+    r = ifelse.(abs.(dest) .>= 500, abs.(ln_s_data .- log.(max.(s_model, floor_s))), zero(eltype(dest)))
+    return (n_at, mapreduce(x -> x >= tol ? 1 : 0, +, r; init = 0), Float64(maximum(r)))
+end
+
+"""Count of entries at ±500 in a CPU or GPU array (the share kernels' clamp of V = δ + μ)."""
+n_at_clamp(A::AbstractArray) = mapreduce(x -> abs(x) >= 500 ? 1 : 0, +, A; init = 0)
+
+"""Store one contraction exit in CLAMP_STATS; print a [CLAMP] line when anything sits at ±500.
+Returns true when the exit is clamp-bound (a converged norm with a clamped residual ≥ tol)."""
+function record_clamp_exit!(exit_kind::AbstractString, n_at::Int, n_bound::Int, max_r::Float64,
+                            n_V::Int, iterations::Int, tol::Float64)::Bool
+    kind = (exit_kind == "converged" && n_bound > 0) ? "clamp_bound" : String(exit_kind)
+    CLAMP_STATS[] = Dict{String,Any}("exit" => kind, "n_delta_at_clamp" => n_at, "n_bound" => n_bound,
+                                     "max_resid_at_clamp" => max_r, "n_V_at_clamp" => n_V,
+                                     "iterations" => iterations, "tol" => tol)
+    (n_at > 0 || n_V > 0) &&
+        println("    [CLAMP] exit $kind after $iterations evals: δ at ±500 $n_at" *
+                (n_bound >= 0 ? " ($n_bound with pre-clamp residual ≥ $tol, max $(round(max_r, sigdigits = 4)))" : "") *
+                " | V at ±500 $n_V")
+    return kind == "clamp_bound"
+end
+
 function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
                            pc::Precomp, R::Int;
                            tol::Float64=1e-12, max_iter::Int=5000)
@@ -1028,6 +1498,23 @@ function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
     r_vec  = Vector{Float64}(undef, N)
     v_vec  = Vector{Float64}(undef, N)
     x_prop = Vector{Float64}(undef, N)
+    # b4 (BLP_INNER_CLAMP_TEST=1): at an exit, the coordinates the clamp holds are checked on their
+    # pre-clamp residual, from the shares of the last T step (buf.s_B / buf.s_D, at that step's src).
+    ctest = inner_clamp_test()
+    ln_s_full = ctest ? [pc.b_mask[i] ? pc.ln_s_data_B_cond[i] : pc.ln_s_data_D[i] for i in 1:N] : Float64[]
+    function clamp_exit!(dest::Vector{Float64}, kind::String, fevals::Int)::Bool
+        n_V = n_at_clamp(buf.V_B) + n_at_clamp(buf.V_D)
+        if kind == "converged"
+            s_full = Vector{Float64}(undef, N); b_idx = 0; d_idx = 0
+            @inbounds for i in 1:N
+                if pc.b_mask[i]; b_idx += 1; s_full[i] = buf.s_B[b_idx]
+                else;            d_idx += 1; s_full[i] = buf.s_D[d_idx]; end
+            end
+            n_at, n_bound, max_r = clamp_residual_stats(dest, s_full, ln_s_full, 1e-15, tol)
+            return record_clamp_exit!(kind, n_at, n_bound, max_r, n_V, fevals, tol)
+        end
+        return record_clamp_exit!(kind, n_at_clamp(dest), -1, NaN, n_V, fevals, tol)
+    end
 
     function T_inplace!(dest::Vector{Float64}, src::Vector{Float64})
         compute_model_shares!(buf, src, pc, R)
@@ -1050,6 +1537,7 @@ function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
         T_inplace!(x1, delta); fevals += 1
         if !all(isfinite, x1)
             println("    [SQUAREM ABORT] non-finite at eval=$fevals")
+            ctest && clamp_exit!(delta, "nonfinite", fevals)
             return false, fevals, norm_history
         end
         nm = 0.0
@@ -1061,11 +1549,15 @@ function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
         (fevals % 50 == 0 || nm < tol) &&
             println("    [SQUAREM eval=$fevals/$max_iter] norm=$(round(nm, sigdigits=4))")
         if nm < tol
+            if ctest && clamp_exit!(x1, "converged", fevals)
+                copyto!(delta, x1); return false, fevals, norm_history
+            end
             copyto!(delta, x1); return true, fevals, norm_history
         end
 
         T_inplace!(x2, x1); fevals += 1
         if !all(isfinite, x2)
+            ctest && clamp_exit!(x1, "nonfinite", fevals)
             copyto!(delta, x1); return false, fevals, norm_history
         end
         nm2 = 0.0
@@ -1074,6 +1566,9 @@ function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
         (fevals % 50 == 0 || nm2 < tol) &&
             println("    [SQUAREM eval=$fevals/$max_iter] norm=$(round(nm2, sigdigits=4))")
         if nm2 < tol
+            if ctest && clamp_exit!(x2, "converged", fevals)
+                copyto!(delta, x2); return false, fevals, norm_history
+            end
             copyto!(delta, x2); return true, fevals, norm_history
         end
 
@@ -1102,6 +1597,7 @@ function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
             end
         end
     end
+    ctest && clamp_exit!(delta, "cap", fevals)
     return false, fevals, norm_history
 end
 

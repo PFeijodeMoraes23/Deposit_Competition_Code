@@ -81,8 +81,13 @@ CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed',
 # PHI_CAP  φ is capped before forming (1-φ). The BLP share is a share of ACTIVE depositors, so its
 #          denominator is the ACTIVE market (1-φ)·M; without a cap, (1-φ)→0 in near-comatose markets
 #          and a single market-quarter would set r̂ for the whole country. The SAME capped φ is used
-#          in the anchor and in the share, which is what guarantees Σ_j s_j ≤ 1/bc < 1.
-#          0.99 barely binds: p90(φ)=0.977.
+#          in the anchor, in the market-size floor and in the share; the bound Σ_j s_j ≤ TOTAL_SHARE_CAP
+#          comes from that floor (below).
+#          The cap binds often, not only in a tail: on the spec-12 frames it is about half of the B
+#          demand rows, the markets it binds hold most of the q95 anchor's top tail, so it shapes r̂,
+#          and it binds the national φ_t of the D rows in some quarters as well.
+#          demand.phicap.rows.E{k} / demand.phicap.dep.E{k} (make_paper_numbers.py collect_phi_cap)
+#          measure it on the current frames. Dep_Act (14-B) and its truncation use φ uncapped.
 # RMAX_RULE  anchor for d̄ = bc·r̂. The original 'max' is set by an outlier — 16.4× the p99, a
 #          74,000-population municipality — which crushes the typical market's inside share to
 #          ~0.001 (a 99.9% outside option) and leaves the model with no competitive interaction.
@@ -554,7 +559,7 @@ def process_specification(spec_name, spec_res, df_base, link, pre_cut=False):
     #
     # PHI_CAP: (1-φ) → 0 as φ → 1, so the ratio explodes in near-comatose markets and a single such
     # market-quarter would otherwise set r̂ for the whole country. Cap φ, and use the SAME capped φ in
-    # BOTH the anchor and the share — that is what guarantees Σ_j s_j ≤ 1/bc  < 1.
+    # the anchor, the market-size floor and the share; the floor bounds Σ_j s_j at TOTAL_SHARE_CAP.
     # Market size M_mt / M_nat and the ACTIVE-depositor shares (share_B_cond, share_D).
     # Single shared implementation — see build_market_size_and_shares() above and
     # counterfactuals_plan.md §0. Do NOT re-inline: three divergent copies is how the

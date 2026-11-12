@@ -13,7 +13,7 @@ The simulated world (equation numbers are the note's):
     and the outside pool O_mt = M_hat_mt - sum of the B lagged stocks (K0 (d)). D firms are on the
     menu of every market, as in the paper's market structure, and their depositors sit in O.
   - Mean utilities: the stored logit deltas of E3 spec 12 (blp_logit.jl berry_inversion, the
-    10-29 local prep; checked here against the closed form) when the prep's metadata names the
+    I2 prep of 11-06; checked here against the closed form) when the prep's metadata names the
     binary's panel (DELTA_BIN_PANEL_MD5), else the closed form itself (read_menu records which),
     A0 (no mu), one phi_mt (the stored phi-hat), A = 1, no clock (omega = 1, lambda = 0, so
     nothing is locked).
@@ -65,7 +65,7 @@ e^a. On the data this object needs phi-hat (it is (11-B) without the truncation)
 decision there (k2_report.md).
 
 Inputs (read only):
-  - processed/market_panel.parquet (md5 d01b8bae), once, through diag_k0_netflow_objects.load_panel
+  - processed/market_panel.parquet (md5 fa38794d), once, through diag_k0_netflow_objects.load_panel
     with K0's columns plus spread_a5; the 2013-2015 balances from processed/demand_chars.parquet.
   - ESTIMATION_OUTPUT/DEMAND_PREP/demand_3_index_spec_12.parquet (phi_mt, M_mt, the menu).
   - ESTIMATION_OUTPUT/BLP_RESULTS/logit/logit_delta_E3_spec_12.bin (Int64 n, then n Float64, the
@@ -98,7 +98,29 @@ import diag_k0_netflow_objects as k0
 
 # ------------------------------------------------------------------------------------- parameters
 SEED = 20261103          # printed; no step draws a random number (A0 has no mu draws)
-ALPHA_BAR = -0.117       # mean price coefficient per pp a year (the note's adopted value under (III))
+ALPHA_SOURCE = paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_raw" / "blp_results_E3_spec_12_ext1.json"
+ALPHA_PAPER = -0.216     # demand.t6.alpha.E3 at three decimals: the guard on the file's alpha and its units
+
+
+def read_alpha():
+    """The simulated price response (Pedro, 11-08): E3's ext1 BLP mean price coefficient, theta1
+    "alpha" per pp a year, from the I2 ingest's results json (ALPHA_SOURCE). Refused unless the file is
+    stage ext1, estim 3, converged, and its alpha is finite, negative and equal to ALPHA_PAPER at three
+    decimals."""
+    r = json.loads(ALPHA_SOURCE.read_text(encoding="utf-8"))
+    names = r.get("param_names_theta1") or []
+    a = float(r["theta1"][names.index("alpha")]) if "alpha" in names else float("nan")
+    bad = [m for m, ok in (("stage is not ext1", r.get("stage") == "ext1"), ("estim is not 3", r.get("estim") == 3),
+                          ("not converged", r.get("converged") is True), ("alpha not finite", np.isfinite(a)),
+                          ("alpha not negative", a < 0), (f"alpha {a} is not {ALPHA_PAPER} at 3 dp",
+                                                          round(a, 3) == ALPHA_PAPER)) if not ok]
+    if bad:
+        raise SystemExit(f"{ALPHA_SOURCE.name}: " + "; ".join(bad))
+    print(f"ALPHA_BAR {a!r} from {ALPHA_SOURCE.relative_to(paths.PROCESSED)} (theta1 alpha, stage ext1, E3)", flush=True)
+    return a
+
+
+ALPHA_BAR = read_alpha()  # mean price coefficient per pp a year
 KAPPAS = (0.0, 0.5, 1.0, 2.0)
 KAPPA_BASE = 0.5         # steps 3-6
 A_AWARE = 1.0            # awareness: every bank in every choice set
@@ -111,7 +133,7 @@ assert A_AWARE == 1.0 and OMEGA == 1.0 and LAMBDA == 0.0, "the simulator impleme
 
 DEMAND = paths.demand_parquet_dir() / "demand_3_index_spec_12.parquet"
 DELTA_BIN = paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "logit" / "logit_delta_E3_spec_12.bin"
-DELTA_BIN_PANEL_MD5 = "d01b8bae"   # the 10-27 panel, which the prep behind DELTA_BIN was built on
+DELTA_BIN_PANEL_MD5 = "fa38794d"   # the panel (I2) the prep behind DELTA_BIN was built on
 OUT = paths.rout_dir()
 T0, T1 = k0.T0, k0.T1
 TYPES5 = (1, 2, 4, 5)
@@ -935,7 +957,8 @@ def main():
     menu, menu_rec = read_menu()
     U, MT, SD, SD4, info = build(df, flags, mk, menu)
     K, kinfo = k1_rows(U, MT, df, flags, mk)
-    N = {"seed": SEED, "alpha_bar": ALPHA_BAR, "kappas": KAPPAS, "kappa_base": KAPPA_BASE, "A": A_AWARE,
+    N = {"seed": SEED, "alpha_bar": ALPHA_BAR, "alpha_bar_source": str(ALPHA_SOURCE.relative_to(paths.PROCESSED)),
+         "kappas": KAPPAS, "kappa_base": KAPPA_BASE, "A": A_AWARE,
          "omega": OMEGA, "lambda": LAMBDA, "panel_md5": k0.PANEL_MD5, "panel_columns": k0.COLS,
          "demand_parquet": DEMAND.name, "delta_binary": str(DELTA_BIN.relative_to(paths.PROCESSED)),
          **menu_rec, **info, **kinfo, "steps": steps}

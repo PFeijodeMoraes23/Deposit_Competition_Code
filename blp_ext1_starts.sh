@@ -73,30 +73,11 @@ import json, sys
 from pathlib import Path
 diag, prod, stage, starts = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
 npar, fd_tol, run_env = int(sys.argv[5]), float(sys.argv[6]), sys.argv[7]
-if stage == "ext1":
-    print(f"{'run':16s} {'conv':5s} {'Q':>9s} {'alpha':>8s} {'se':>7s}  theta2 (sigma, pi gdp, pi 65+, pi mobile, pi assets x gdp)")
-    for k in (3, 4):
-        f = prod / f"blp_results_E{k}_spec_12_ext1.json"
-        if f.is_file():
-            j = json.loads(f.read_text())
-            se = (j.get("theta1_se") or [None])[0]
-            print(f"{'E%d production' % k:16s} {str(j.get('converged')):5s} {j.get('Q_value', float('nan')):9.4f} "
-                  f"{j['theta1'][0]:+8.3f} {se if se is None else round(se, 3)!s:>7s}  "
-                  + ", ".join(f"{x:+.3f}" for x in j.get("theta2", [])))
-        for sb in sorted(diag.glob(f"E{k}_*")):
-            f = sb / "data" / "output" / "blp" / f"blp_results_E{k}_spec_12_ext1.json"
-            if not f.is_file():
-                print(f"{sb.name:16s} (no result yet)")
-                continue
-            j = json.loads(f.read_text())
-            se = (j.get("theta1_se") or [None])[0]
-            print(f"{sb.name:16s} {str(j.get('converged')):5s} {j.get('Q_value', float('nan')):9.4f} "
-                  f"{j['theta1'][0]:+8.3f} {se if se is None else round(se, 3)!s:>7s}  "
-                  + ", ".join(f"{x:+.3f}" for x in j.get("theta2", [])))
-    sys.exit(0)
 
-# ext2 / extended: the FD check decides, and each fit is compared with its start.
-names = {"ext2": "sigma, pi gdp, pi 65+, pi mobile, pi assets x gdp, pi fgc x 65+",
+# Every rung: the FD check, the move from the start, the delta start, and why the optimizer stopped
+# (the engine's "outer" record, written since engine edit (b); "-" for a result without it).
+names = {"ext1": "sigma, pi gdp, pi 65+, pi mobile, pi assets x gdp",
+         "ext2": "sigma, pi gdp, pi 65+, pi mobile, pi assets x gdp, pi fgc x 65+",
          "extended": "sigma, pi gdp, pi 65+, pi mobile, pi assets x gdp, pi fgc x 65+, pi fgc x cadunico"}[stage]
 start = {}
 if starts.is_file():
@@ -117,18 +98,32 @@ def fd_cols(j):
     fmt = lambda x: f"{x:9.2e}" if isinstance(x, (int, float)) else f"{'n/a':>9s}"
     return f"{fmt(n)} {fmt(e)} {b:+10.2e}  {'pass' if ok else 'FAIL'}", ok
 
+def stop_cols(j):
+    o = j.get("outer") or {}
+    s, ls = str(o.get("stop_reason") or "-"), str(o.get("line_search") or "")
+    code = ("CONV:PG" if "PROJECTED_GRADIENT" in s else "CONV:F" if "REL_REDUCTION" in s else
+            "ABNORMAL" if s.startswith("ABNORMAL") else "STOP" if s.startswith("STOP") else
+            "FMINBOX" if "Fminbox" in s else "-" if s == "-" else s[:8])
+    code += "+W" if ls.startswith("WARNING") else ""
+    g = o.get("inner_guard") or {}
+    gtxt = f"{g.get('n_fail', '-')}/{g.get('n_eval', '-')}" if g else "-"
+    return f"{code:10s} {str(o.get('n_evals', '-')):>5s} {str(o.get('step', '-')):5s} {gtxt:>7s}"
+
 def line(name, j, moved, delta):
     se = (j.get("theta1_se") or [None])[0]
     fd, ok = fd_cols(j)
     t1 = j.get("theta1") or [float("nan")]
-    print(f"{name:18s} {str(j.get('converged')):5s} {j.get('Q_value', float('nan')):10.7f} "
+    print(f"{name:18s} {str(j.get('converged')):5s} {j.get('Q_value', float('nan')):12.10f} "
           f"{t1[0]:+8.3f} {se if se is None else round(se, 3)!s:>7s} {str(j.get('se_status', '-'))[:6]:6s} "
-          f"{fd} {moved:>8s} {delta:8s} " + ", ".join(f"{x:+.4f}" for x in j.get("theta2", [])))
+          f"{fd} {moved:>8s} {delta:8s} {stop_cols(j)} " + ", ".join(f"{x:+.6f}" for x in j.get("theta2", [])))
     return ok
 
-print(f"stage {stage}; FD pass = best dQ >= {0.0 - fd_tol:g}; moved = max |theta2* - start|")
-print(f"{'run':18s} {'conv':5s} {'Q':>10s} {'alpha':>8s} {'se':>7s} {'se_st':6s} "
-      f"{'FD norm':>9s} {'IFT norm':>9s} {'best dQ':>10s}  {'FD':4s} {'moved':>8s} {'delta':8s} theta2 ({names})")
+print(f"stage {stage}; FD pass = best dQ >= {0.0 - fd_tol:g}; moved = max |theta2* - start|; "
+      "stop = the optimizer's stop (CONV:PG projected gradient, CONV:F relative reduction of Q, +W after a "
+      "line-search WARNING), evals, step control, guard = failed/all inner evaluations")
+print(f"{'run':18s} {'conv':5s} {'Q':>12s} {'alpha':>8s} {'se':>7s} {'se_st':6s} "
+      f"{'FD norm':>9s} {'IFT norm':>9s} {'best dQ':>10s}  {'FD':4s} {'moved':>8s} {'delta':8s} "
+      f"{'stop':10s} {'evals':>5s} {'step':5s} {'guard':>7s} theta2 ({names})")
 routines = sorted({int(n[1:].split("_")[0]) for n in start}
                   | {int(p.name[1:].split("_")[0]) for p in diag.glob("E*_*") if p.is_dir()})
 for k in routines:
@@ -151,6 +146,8 @@ for k in routines:
         ok = line(sb.name, j, moved, delta)
         if ok and j.get("converged") is True and j.get("se_status") == "ok":
             cands.append((j.get("Q_value", float("inf")), sb.name))
+    if stage == "ext1":
+        continue                     # ext1: the table only, as before (adoption: blp_ext1_adopt.sh)
     if cands:
         q, nm = min(cands)
         print(f"  E{k}: lowest Q among the converged fits that pass the FD check with se_status ok: {nm} "

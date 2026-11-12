@@ -2514,10 +2514,10 @@ def collect_k2_world(notes: list):
 
 
 # Step 7 of diag_k2_nls_simulation.py (the paper's random coefficients as the data-generating
-# process, fitted under A1) on the fa38794d panel, written with --out to this folder. Step 7 reads
-# the extended stage of BLP_RESULTS/cluster_processed/blp_E3_spec_12.json as its data-generating
-# process.
-K2_STEP7_DIR = "k2_fa38794d"
+# process, fitted under A1) on the fa38794d panel at I2's price coefficient (ALPHA_BAR from the E3 ext1
+# BLP fit), written with --out to this folder. Step 7 reads the extended stage of
+# BLP_RESULTS/cluster_processed/blp_E3_spec_12.json as its data-generating process.
+K2_STEP7_DIR = "k2_fa38794d_a216"
 
 
 def collect_k2_rc(notes: list):
@@ -2534,12 +2534,18 @@ def collect_k2_rc(notes: list):
     d = pd.read_csv(p)
     nj = d7 / "k2_nls_numbers.json"
     meta = json.loads(nj.read_text(encoding="utf-8")) if nj.is_file() else {}
-    if "7" not in [str(s) for s in meta.get("last_run", {}).get("steps", [])]:
+    # A later step run into the same folder (2b) rewrites last_run, so a finished step 7 is also
+    # recognised by its own record: the "rc" block (theta2, draws) that only step 7 writes.
+    step7_last = "7" in [str(s) for s in meta.get("last_run", {}).get("steps", [])]
+    step7_rec = isinstance(meta.get("rc"), dict) and bool(meta["rc"].get("theta2"))
+    if not (step7_last or step7_rec):
         notes.append(f"{K2_STEP7_DIR}/k2_nls_numbers.json does not record a finished step 7; "
                      "kappa.k2.rc.* entries absent.")
         return
+    step7_src = (f"finished {meta['last_run'].get('finished')}" if step7_last
+                 else f"step 7 record in the json; last run {meta.get('last_run', {}).get('last_step_done')}")
     is_rc = d["dgp"].str.startswith("random coefficients")
-    v, fits = {}, {}
+    v, fits, box_params = {}, {}, {}
     for kp, slug in ((0.5, "k05"), (1.0, "k10")):
         rows = {}
         for dgp, mask in (("rc", is_rc), ("logit", ~is_rc)):
@@ -2556,6 +2562,12 @@ def collect_k2_rc(notes: list):
             v[slug]["truth"] = float(kp)
             v[slug]["inflow_ratio"] = {q: float(rows["rc"][f"rc_over_base_inflow_{q}"])
                                        for q in ("p10", "p50", "p90")}
+            # k2_rc.csv's at_box lists the parameters that ended at the optimizer's box (';'-joined);
+            # rc.at_box is 1 when kappa-tilde is among them.
+            boxed = rows["rc"].get("at_box")
+            boxed = [s.strip() for s in str(boxed).split(";") if s.strip()] if pd.notna(boxed) else []
+            v[slug]["rc"]["at_box"] = int("kappa" in boxed)
+            box_params[slug] = ";".join(boxed)
             fits[slug] = rows
     if not v:
         return
@@ -2567,12 +2579,13 @@ def collect_k2_rc(notes: list):
         "flows simulated with the E3 spec-12 random coefficients (rc) and on the same world's logit "
         "flows (logit, refit): kappa, se (cluster sandwich by conglomerate; the simulation has no "
         "sampling noise, so it measures misfit), bias = kappa - truth, alpha, converged (1/0; 0 "
-        "when the fit stopped at its iteration limit); inflow_ratio: p10/p50/p90 over K1 units of the "
+        "when the fit stopped at its iteration limit); rc.at_box: 1 if the rc fit's kappa-tilde ended "
+        "at the optimizer's box; inflow_ratio: p10/p50/p90 over K1 units of the "
         "random-coefficient awake inflow over the logit one; n, markets: the fit's rows and "
         f"markets; draws: consumers per market. Panel snapshot {meta.get('panel_md5')}, demand "
         f"frames {str(meta.get('frame_panel_md5', ''))[:8]}, delta {meta.get('delta_source')}",
         f"Rout/{K2_STEP7_DIR}/k2_rc.csv and k2_nls_numbers.json (diag_k2_nls_simulation.py --steps "
-        f"7, finished {meta['last_run'].get('finished')})", "ok",
+        f"7, {step7_src})", "ok", detail=dict(at_box_params=box_params),
         display=", ".join(f"{s}: rc {fmt3s(x['rc']['kappa'])} ({fmt3s(x['rc']['se'])}), logit "
                           f"{fmt3s(x['logit']['kappa'])}" for s, x in v.items()
                           if isinstance(x, dict) and "rc" in x))
@@ -2587,6 +2600,20 @@ K2_H_CODES = {"h10": 1.0, "h09": 0.9, "h07": 0.7, "h05": 0.5}
 def _lf_md5(p: pathlib.Path) -> str:
     import hashlib
     return hashlib.md5(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _md5sums_stale(folder: pathlib.Path, names) -> list:
+    """The files among `names` that folder/MD5SUMS.txt ('<md5>  <name>' lines, LF md5s) does not list,
+    that are missing, or whose LF md5 is not the one listed."""
+    p = folder / "MD5SUMS.txt"
+    if not p.is_file():
+        return ["MD5SUMS.txt (missing)"]
+    want = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            want[parts[1].strip()] = parts[0].lower()
+    return [n for n in names if n not in want or not (folder / n).is_file() or _lf_md5(folder / n) != want[n]]
 
 
 def collect_k2_steps56(notes: list):
@@ -2894,6 +2921,40 @@ def collect_pix_adv(notes: list):
     add("pix.adv.rest.elast", "T", "Openings on advertising, rest, point estimate",
         float(g["adv_rest"]["b"]), "Same-quarter elasticity of openings to log advertising, B "
         "banks outside the big five (groups_B)", src, "ok")
+    # Rest minus the five largest, same quarter (groups_B) and intensive margin (intensive_B), with RI-t
+    # and CR2 (diagnostics/diag_p4_adv_group_diff.py): registered only while that sidecar's gates passed
+    # and the LF md5s it records are those of its inputs in Rout now.
+    sc, src_d = _rout_sidecar("p4_adv_group_diff.json", "diagnostics/diag_p4_adv_group_diff.py", notes)
+    if sc is None:
+        return
+    meta, rout = sc.get("_meta") or {}, _paths.rout_dir()
+    stale = [f["file"] for f in (meta.get("inputs") or {}).values()
+             if not (rout / f["file"]).is_file() or _lf_md5(rout / f["file"]) != f["lf_md5"]]
+    if not meta.get("gates_passed") or not meta.get("inputs") or stale or "keys" not in sc:
+        notes.append(f"p4_adv_group_diff.json: gates passed {meta.get('gates_passed')}, inputs changed since "
+                     f"its run {stale}; pix.adv.diff*, pix.adv.big5.elast_p_cr2 absent.")
+        return
+    k = sc["keys"]
+    src_d += (f", LF md5 {_lf_md5(rout / 'p4_adv_group_diff.json')[:8]}, on P4's panel file and JSON "
+              f"(panel {str(meta.get('panel_md5'))[:8]})")
+    for c, what in (("diff", "same quarter (groups_B)"),
+                    ("diff_int", "intensive margin, log advertising where positive (intensive_B)")):
+        v = k[c]
+        for leaf, name in (("ci", "bootstrap interval"), ("ri", "randomization set")):
+            if leaf not in v:
+                notes.append(f"p4_adv_group_diff.json: {c} has no bounded {name}; pix.adv.{c}.{leaf} absent.")
+        add(f"pix.adv.{c}", "T", f"Openings on advertising: rest minus the five largest, {what}", v,
+            "Rest minus the five largest (P4's coefficient on log advertising x big five, sign flipped): elast; "
+            "p, ci.lo/hi: wild cluster restricted bootstrap p and 95 percent interval (P4's draws); G.big5/G.rest: "
+            "clusters; p_ri, ri.lo/hi: randomization-t p and 95 percent set by test inversion over all ri_n "
+            "five-sets of the ri_pool B conglomerates that advertise in every sample quarter (at least 12); "
+            "p_cr2, df_cr2: CR2 p and its Bell-McCaffrey df; G_eff: 1 / sum of squared cluster shares of the "
+            "partialled log advertising x big five; caixa_share: Caixa's share", src_d, "ok",
+            display=f"{fmt3s(v['elast'])}; p boot {fmt3s(v['p'])}, RI {fmt3s(v['p_ri'])}, "
+                    f"CR2 {fmt3s(v['p_cr2'])} (df {fmt3s(v['df_cr2'])})")
+    add("pix.adv.big5.elast_p_cr2", "T", "Openings on advertising, five largest, CR2 p",
+        float(k["big5_elast_p_cr2"]), "CR2 p (Bell-McCaffrey df) of the five largest's same-quarter "
+        "elasticity (groups_B), beside the bootstrap p pix.adv.big5.elast_p", src_d, "ok")
 
 
 # The P3 first-stage F statistics the paper quotes, fields of an entry of Rout/p3_numbers.json.
@@ -3157,6 +3218,398 @@ def collect_big5_branches(notes: list):
         display=f"{fmt3s(v['mca_share']['2019Q4'])} of {len(mk):,} MCAs; population "
                 f"{fmt3s(v['pop_share']['2019Q4'])}")
 
+
+# Registry 18810.025399/2026-18 (make_lambda_registry.py): the sidecar and the monthly segment shares
+# it is checked against, both in Rout/lambda_registry/, built on this panel.
+LAMBDA_REG_DIR = "lambda_registry"
+LAMBDA_REG_PANEL = "fa38794d"
+
+
+def collect_lambda_registry(notes: list):
+    """reg.lambda: lambda from the BCB's answer to registry request 18810.025399/2026-18
+    (make_lambda_registry.py, Rout/lambda_registry/). reg.lambda.pfpj: the share of the PF/PJ CDB
+    stock with RESGATE = S (redeemable before maturity) by prudential segment, over the Decembers of
+    2018-2024: S1.min and S1.max, and all.min, the smallest share in any segment (its segment and month
+    in the detail). reg.lambda.B.tdw.2019Q4: the dep_a4-weighted mean over the panel's B conglomerates
+    in 2019Q4 of their segment's 2019-12 PF/PJ share, the segment from the conglomerate-to-segment map
+    (R-q at 2019Q4). The December shares are recomputed from registry_segment_month.csv and must equal
+    the sidecar's; the sidecar must be built on LAMBDA_REG_PANEL."""
+    sc, src = _rout_sidecar(f"{LAMBDA_REG_DIR}/lambda_registry_numbers.json", "make_lambda_registry.py", notes)
+    if sc is None:
+        return
+    p = _paths.rout_dir() / LAMBDA_REG_DIR / "registry_segment_month.csv"
+    if not p.is_file():
+        notes.append(f"Rout/{LAMBDA_REG_DIR}/{p.name} not found; reg.lambda.* absent.")
+        return
+    panel_md5 = str(sc["inputs"]["panel"]["md5"])
+    if not panel_md5.startswith(LAMBDA_REG_PANEL):
+        notes.append(f"lambda_registry_numbers.json is on panel {panel_md5[:8]}, not {LAMBDA_REG_PANEL}; "
+                     "reg.lambda.* absent.")
+        return
+    k = sc["keys"]
+    m = pd.read_csv(p)
+    dec = m[(m["holders"] == "pfpj") & (m["month"] % 100 == 12) & (m["month"] // 100).between(2018, 2024)]
+    # a segment that phases into the registry counts from its first full-stock month (the sidecar's
+    # first_full_month; S5 from 2019-03, so its first December is 2019-12)
+    ff = {str(s): int(v) for s, v in (sc.get("first_full_month") or {}).items()}
+    dec = dec[dec["month"] >= dec["segment"].map(ff).fillna(0)]
+    n_dec = 35 - sum(1 for v in ff.values() for y in range(2018, 2025) if y * 100 + 12 < v)
+    s1 = dec.loc[dec["segment"] == "S1", "share_S"]
+    lo, hi, amin = k["reg.lambda.pfpj.S1.min"], k["reg.lambda.pfpj.S1.max"], k["reg.lambda.pfpj.all.min"]
+    if (len(dec) != n_dec or abs(float(s1.min()) - lo["value"]) > 1e-12 or abs(float(s1.max()) - hi["value"]) > 1e-12
+            or abs(float(dec["share_S"].min()) - amin["value"]) > 1e-12):
+        notes.append(f"Rout/{LAMBDA_REG_DIR}: the December shares of {p.name} differ from "
+                     "lambda_registry_numbers.json; reg.lambda.* absent.")
+        return
+
+    def month(x):
+        return f"{int(x) // 100}-{int(x) % 100:02d}"
+    reg = sc["inputs"]["registry"]
+    src_reg = (f"Rout/{LAMBDA_REG_DIR}/{p.name} (LF md5 {_lf_md5(p)[:8]}) and {src}, from "
+               f"DATA_RAW/BCB/registry_025399 (md5 {str(reg['md5'])[:8]})")
+    add("reg.lambda.pfpj", "L1/E4", "Registry lambda: PF/PJ CDB share redeemable before maturity, by segment, "
+        "Decembers 2018-2024",
+        dict(S1=dict(min=lo["value"], max=hi["value"]), all=dict(min=amin["value"])),
+        "Share of the CDB stock held by PF/PJ holders with RESGATE = S (redeemable before maturity; an upper "
+        "bound on daily liquidity) in the BCB's answer to registry request 18810.025399/2026-18 (stock by "
+        "prudential segment S1-S5 of Res. CMN 4.553/2017 and month): S1.min and S1.max, the smallest and "
+        "largest S1 share over the Decembers of 2018-2024; all.min, the smallest share in any segment over "
+        "the same Decembers, S5 counted from 2019-12 (it phases into the registry over 2018-02 to 2019-02; its "
+        "segment and month in the detail)",
+        src_reg, "ok",
+        detail=dict(S1_min_month=month(lo["month"]), S1_max_month=month(hi["month"]),
+                    all_min_segment=amin["segment"], all_min_month=month(amin["month"]),
+                    by_segment=k["by_segment_decembers_2018_2024"]),
+        display=f"S1 {fmt3s(lo['value'])} to {fmt3s(hi['value'])}; min {fmt3s(amin['value'])} "
+                f"({amin['segment']} {month(amin['month'])})")
+    t = k["reg.lambda.B.tdw.2019Q4"]
+    add("reg.lambda.B.tdw", "L1/E4", "Registry lambda of the B banks, time-deposit-weighted, 2019Q4",
+        {"2019Q4": t["value"]},
+        "Mean over the panel's B conglomerates in 2019Q4, weighted by their time deposits (dep_a4), of the "
+        "2019-12 PF/PJ share redeemable before maturity (RESGATE = S) of each conglomerate's prudential "
+        "segment; the segment from the BCB's IF.data register (Sr, Res. CMN 4.553/2017) in 2019Q4 (the R-q "
+        "version of make_lambda_registry.py at 2019Q4)",
+        f"{src} (panel md5 {panel_md5[:8]})", "ok",
+        detail=dict(B_conglomerates=t["B_conglomerates"], B_with_dep=t["B_with_dep"],
+                    dep_share_by_segment=t["dep_share_by_segment"], seg_src_counts=t["seg_src_counts"],
+                    panel_md5=panel_md5),
+        display=f"{fmt3s(t['value'])} ({t['B_conglomerates']} B conglomerates)")
+
+
+# Part A of the net-flow gap (diagnostics/diag_netflow_gap.py, Rout/diag_netflow_gap/), run on this panel:
+# the files its keys read, the time-deposit cell groups of its A1 table (key leaf -> the table's split),
+# and the worlds the text sets against the data (W0, the K2 world; W3, the stored delta at kappa 0 with
+# the awake share from the capped phi).
+NETFLOW_GAP_DIR = "diag_netflow_gap"
+NETFLOW_GAP_PANEL = "fa38794d"
+NETFLOW_GAP_FILES = ("netflow_gap_numbers.json", "a1_world_moving_share.csv", "a2_variance_split.csv",
+                     "a3_rebooking.csv", "a4_feasibility.csv")
+NETFLOW_GAP_GROUPS = {"uncapped": "on_menu_phi_le_cap", "capped": "on_menu_phi_gt_cap",
+                      "truncated": "off_menu"}
+NETFLOW_GAP_WORLDS = ("W0", "W3")
+
+
+def collect_netflow_gap(notes: list):
+    """kappa.gap: Part A of the net-flow gap for time deposits (type 4), from Rout/diag_netflow_gap/
+    (diagnostics/diag_netflow_gap.py). kappa.gap.share and kappa.gap.median: the A1 table's cells of
+    kappa.k0.moving.median.k4 that have a unit in the K2 world, in three groups, and the median
+    |net flow| / carry of each group and of all of them in the data and in the worlds W0 and W3;
+    kappa.gap.lift.any: A3's lift of any institutional event among the largest net flows;
+    kappa.gap.within.k4: A2's carry-weighted share of the variance within the market-quarter.
+    Registered only when the files match the folder's MD5SUMS.txt, the run is on NETFLOW_GAP_PANEL with
+    its gates G-A0 and G-A1 passed, and its data median over the key's cells equals the one
+    kappa.k0.moving.median.k4 reads now (Rout/k0_netflow_summary.csv, year all, k 4) to 1e-12."""
+    rout = _paths.rout_dir()
+    d0 = rout / NETFLOW_GAP_DIR
+    sc, _ = _rout_sidecar(f"{NETFLOW_GAP_DIR}/netflow_gap_numbers.json", "diagnostics/diag_netflow_gap.py",
+                          notes)
+    if sc is None:
+        return
+    bad = [f"{n} not as MD5SUMS.txt lists it" for n in _md5sums_stale(d0, NETFLOW_GAP_FILES)]
+    panel = str(((sc.get("inputs") or {}).get("market_panel.parquet") or {}).get("md5") or "")
+    if not panel.startswith(NETFLOW_GAP_PANEL):
+        bad.append(f"run on panel {panel[:8] or '(not recorded)'}, not {NETFLOW_GAP_PANEL}")
+    gate_a1 = (sc.get("gate_A1") or {}).get(str(sc.get("delta_for_worlds"))) or {}
+    if not ((sc.get("gate_A0") or {}).get("pass") is True and gate_a1.get("pass") is True):
+        bad.append("gate G-A0 or G-A1 not passed")
+    here = (((sc.get("a1") or {}).get("data_key_median_check") or {}).get("4") or {}).get("here")
+    k0p = rout / "k0_netflow_summary.csv"
+    if here is None or not k0p.is_file():
+        bad.append("no data median to set against k0_netflow_summary.csv")
+    else:
+        k0 = pd.read_csv(k0p, dtype={"year": str})
+        key_med = float(k0[k0["year"] == "all"].set_index("k").loc[4, "moving_median"])
+        if abs(float(here) - key_med) > 1e-12:
+            bad.append(f"its data median {here} is not k0_netflow_summary.csv's {key_med}")
+    if bad:
+        notes.append("kappa.gap.* absent: " + "; ".join(bad) + ".")
+        return
+    a1 = pd.read_csv(d0 / "a1_world_moving_share.csv")
+    a2 = pd.read_csv(d0 / "a2_variance_split.csv")
+    a3 = pd.read_csv(d0 / "a3_rebooking.csv", dtype={"year": str})
+    a4 = pd.read_csv(d0 / "a4_feasibility.csv", dtype={"k": str})
+
+    def one(d, name, **sel):
+        m = np.ones(len(d), bool)
+        for c, x in sel.items():
+            m &= (d[c] == x).to_numpy()
+        if m.sum() != 1:
+            bad.append(f"{name}: {int(m.sum())} rows for {sel}")
+            return None
+        return d[m].iloc[0]
+    groups = {**NETFLOW_GAP_GROUPS, "all": "all"}
+    rows = {(g, w): one(a1, "a1", k=4, split=s, world=w) for g, s in groups.items() for w in NETFLOW_GAP_WORLDS}
+    lift = one(a3, "a3", k=4, year="all", event="any_event")
+    within = {(wt, s): one(a2, "a2", k=4, weighting=wt, sample=s)
+              for wt, s in (("carry", "all"), ("carry", "mq_two_or_more_banks"),
+                            ("unweighted_winsor", "all"), ("carry_winsor", "all"))}
+    trunc = one(a4, "a4", row="L1", k="4")
+    if not bad:
+        w0 = {g: rows[(g, "W0")] for g in groups}
+        if any(w0[g][c] != r[c] for (g, _), r in rows.items() for c in ("data_p50", "n_cells")):
+            bad.append("a1: the data columns differ between the worlds' rows")
+        elif sum(int(w0[g]["n_cells"]) for g in NETFLOW_GAP_GROUPS) != int(w0["all"]["n_cells"]):
+            bad.append("a1: the three groups do not partition the cells")
+    if bad:
+        notes.append("kappa.gap.* absent: " + "; ".join(bad) + ".")
+        return
+    md5 = {n: _lf_md5(d0 / n)[:8] for n in NETFLOW_GAP_FILES}
+    run = f"diagnostics/diag_netflow_gap.py, run {sc.get('finished')}, panel {panel[:8]}"
+    a1src = f"Rout/{NETFLOW_GAP_DIR}/a1_world_moving_share.csv (LF md5 {md5['a1_world_moving_share.csv']}; {run})"
+    n = {g: int(w0[g]["n_cells"]) for g in groups}
+    n_key = int(((sc["a1"].get("cells") or {}).get("cells_key") or {}).get("4", 0))
+    share = {g: float(w0[g]["share_of_type_cells"]) for g in NETFLOW_GAP_GROUPS}
+    add("kappa.gap.share", "T", "Net-flow gap: the time-deposit cell groups (Part A, A1)", share,
+        f"The time-deposit (type 4) cells of kappa.k0.moving.median.k4 that have a unit in the K2 world "
+        f"({n['all']:,} of the key's {n_key:,}), in three groups: uncapped, on the K2 menu (the product has "
+        "a delta-hat) with phi-hat at most 0.99, the cap of the shares; capped, on the menu with phi-hat "
+        "above 0.99; truncated, off the menu, the cells (14-B) truncates (detail.trunc_14b: the share A4 "
+        "counts as truncated, a4_feasibility.csv row L1). Each leaf is the group's share of the cells; the "
+        "three sum to one",
+        f"{a1src}, k = 4, world W0, column share_of_type_cells of the splits "
+        + ", ".join(f"{s} ({g})" for g, s in NETFLOW_GAP_GROUPS.items()), "ok", unit="fraction",
+        display=", ".join(f"{g} {fmt3s(x)}" for g, x in share.items()) + f" of {n['all']:,} cells",
+        detail=dict(cells=n, cells_key=n_key,
+                    trunc_14b=dict(share=float(trunc["share"]), cells=int(trunc["n_cells"]))))
+    med = {g: dict(data=float(w0[g]["data_p50"]),
+                   **{w: float(rows[(g, w)]["world_p50"]) for w in NETFLOW_GAP_WORLDS}) for g in groups}
+    add("kappa.gap.median", "T", "Net-flow gap: median absolute net flow over the carried stock by cell group, "
+        "data and worlds W0 and W3 (Part A, A1)", med,
+        "Median over a group's cells (kappa.gap.share; all: every cell with a world unit) of |net flow| / "
+        "carried stock, time deposits: data, the K0 net flow; W0, the K2 world (stored DGP, kappa 0.5, awake "
+        "share 1 - phi-hat); W3, the stored delta at kappa 0 with the awake share 1 - min(phi-hat, 0.99), "
+        f"the capped phi of the shares. all.data is over the {n['all']:,} cells with a world unit, as W0 and "
+        f"W3 are; over all {n_key:,} cells of the key the data median is kappa.k0.moving.median.k4 "
+        "(detail.data_key_cells, which equals it to 1e-12)",
+        f"{a1src}, k = 4, column data_p50 of the W0 rows and world_p50 of the W0 and W3 rows, splits "
+        + ", ".join(f"{s} ({g})" for g, s in groups.items()), "ok", unit="fraction",
+        display="data / W0 / W3: " + "; ".join(f"{g} {fmt3s(m['data'])} / {fmt3s(m['W0'])} / {fmt3s(m['W3'])}"
+                                               for g, m in med.items()),
+        detail=dict(cells=n, cells_key=n_key, data_key_cells=float(here)))
+    add("kappa.gap.lift.any", "T", "Net-flow gap: lift of any institutional event among the largest time-deposit "
+        "net flows (Part A, A3)", float(lift["lift"]),
+        "Share of the top-decile time-deposit cells (|net flow| / carry above the type's p90 over the key's "
+        "cells, pooled years) with an institutional event at (j, m, t) against t - 1 (own ESTBAN branches, "
+        "the CNPJ set, non-filing, the conglomerate's members, 2016Q1, the rate fallback, judicial deposits), "
+        "divided by the same share over all the key's cells",
+        f"Rout/{NETFLOW_GAP_DIR}/a3_rebooking.csv (LF md5 {md5['a3_rebooking.csv']}; {run}), k = 4, year all, "
+        "event any_event, column lift", "ok",
+        display=f"{fmt3s(lift['lift'])} (top decile {fmt3s(lift['share_top'])}, all cells "
+                f"{fmt3s(lift['share_all'])})",
+        detail=dict(share_top=float(lift["share_top"]), share_all=float(lift["share_all"]),
+                    cells=int(lift["n_cells"]), cells_top=int(lift["n_top"]),
+                    p90=(sc.get("top_decile_p90") or {}).get("4")))
+    wc = within[("carry", "all")]
+    add("kappa.gap.within.k4", "T", "Net-flow gap: share of the variance of time-deposit net flows within the "
+        "market-quarter (Part A, A2)", float(wc["share_within_mq"]),
+        "Share of the carry-weighted variance of net flow / carry over the key's time-deposit cells that lies "
+        "within the market-quarter, across banks; the rest is the market-quarter part (detail: its quarter "
+        "and market-within-quarter pieces, the same share over the market-quarters with two or more banks, "
+        "and with net flow / carry winsorised at p1/p99, unweighted and carry-weighted)",
+        f"Rout/{NETFLOW_GAP_DIR}/a2_variance_split.csv (LF md5 {md5['a2_variance_split.csv']}; {run}), k = 4, "
+        "weighting carry, sample all, column share_within_mq", "ok", unit="fraction",
+        display=fmt3s(wc["share_within_mq"]),
+        detail=dict(quarter=float(wc["share_quarter"]),
+                    market_within_quarter=float(wc["share_market_within_quarter"]),
+                    two_or_more_banks=float(within[("carry", "mq_two_or_more_banks")]["share_within_mq"]),
+                    winsor_unweighted=float(within[("unweighted_winsor", "all")]["share_within_mq"]),
+                    winsor_carry=float(within[("carry_winsor", "all")]["share_within_mq"]),
+                    cells=int(wc["n_cells"]), market_quarters=int(wc["n_mq"])))
+
+
+# Stage 1 of the cap screen (diagnostics/diag_cap_sensitivity.py, Rout/diag_cap_sensitivity/), run on the
+# stored frames of this panel: key leaf -> the screen's variant. CAPSENS_FIT carry the logit's alpha, its p
+# and the elasticity with the markets' shares; CAPSENS_ADM the shares only, since the two loosest phi caps
+# fail the screen's admissibility rule M0 (the median inside share of the markets with phi-hat < 0.98 is
+# below 0.01).
+CAPSENS_DIR = "diag_cap_sensitivity"
+CAPSENS_PANEL = "fa38794d"
+CAPSENS_FILES = ("cap_screen_summary.json", "cap_screen_summary.csv")
+CAPSENS_FIT = {"cap098": "p1", "cap099": "production", "cap0995": "p2", "cap0999": "p4", "dropcap": "p3a",
+               "share090": "s1", "share098": "s2"}
+CAPSENS_ADM = {"cap09999": "p5", "cap099999": "p6"}
+
+
+def collect_cap_screen(notes: list):
+    """demand.capsens.E{k}: how the logit of Table 5 (full_dtype) moves with the cap on phi-hat in the
+    active market and the cap on a market's total inside share, from Stage 1 of the cap screen
+    (Rout/diag_cap_sensitivity/cap_screen_summary.json, diagnostics/diag_cap_sensitivity.py). Registered
+    only when the summary files match the folder's MD5SUMS.txt, gate B-S3 passed in every routine, every
+    frame the screen records is on CAPSENS_PANEL, no logit is missing, and the screen's production alpha
+    is the one Table 5 prints now (LOGIT_SUMMARY, to 1e-12)."""
+    d0 = _paths.rout_dir() / CAPSENS_DIR
+    sc, src = _rout_sidecar(f"{CAPSENS_DIR}/cap_screen_summary.json", "diagnostics/diag_cap_sensitivity.py",
+                            notes)
+    if sc is None:
+        return
+    bad = [f"{n} not as MD5SUMS.txt lists it" for n in _md5sums_stale(d0, CAPSENS_FILES)]
+    gate = sc.get("gate_B_S3") or {}
+    bad += [f"gate B-S3 not passed in E{E}" for E in ROUTINES if (gate.get(f"E{E}") or {}).get("pass") is not True]
+    panels = {k: str(v.get("panel_md5") or "")
+              for k, v in ((sc.get("frames_manifest") or {}).get("sources") or {}).items()}
+    bad += [f"the {k} frame is on panel {p[:8]}" for k, p in panels.items()
+            if p and not p.startswith(CAPSENS_PANEL)]
+    if sc.get("missing_logits"):
+        bad.append(f"logits missing: {sc['missing_logits']}")
+    rows = {(r.get("routine"), r.get("variant")): r for r in sc.get("rows") or []}
+    summ = json.loads(LOGIT_SUMMARY.read_text(encoding="utf-8")) if LOGIT_SUMMARY.is_file() else {}
+    for E in ROUTINES:
+        miss = [v for v in (*CAPSENS_FIT.values(), *CAPSENS_ADM.values()) if (f"E{E}", v) not in rows]
+        if miss:
+            bad.append(f"no E{E} rows for {miss}")
+            continue
+        ent = summ.get(f"E{E}_{LOGIT_SUBMODEL}") or {}
+        names = ent.get("param_names") or []
+        a = float(ent["theta1"][names.index("alpha")]) if "alpha" in names else None
+        a_screen = float(rows[(f"E{E}", "production")]["alpha"])
+        if a is None or abs(a - a_screen) > 1e-12:
+            bad.append(f"E{E}: the screen's production alpha {a_screen} is not Table 5's {a}")
+    if bad:
+        notes.append("demand.capsens.* absent: " + "; ".join(bad) + ".")
+        return
+    src = (f"Rout/{CAPSENS_DIR}/cap_screen_summary.json (LF md5 "
+           f"{_lf_md5(d0 / 'cap_screen_summary.json')[:8]}; diagnostics/diag_cap_sensitivity.py, generated "
+           f"{sc.get('generated')}, frames on panel {next(iter(panels.values()), '')[:8]})")
+    for E in ROUTINES:
+        v, det = {}, {}
+        for leaf, var in {**CAPSENS_FIT, **CAPSENS_ADM}.items():
+            r = rows[(f"E{E}", var)]
+            v[leaf] = (dict(alpha=float(r["alpha"]), p=float(r["p"]), elast=float(r["elasticity_mean"]))
+                       if leaf in CAPSENS_FIT else {})
+            v[leaf].update(inside=float(r["inside_sum_phi_lt_098_median"]),
+                           outside=float(r["outside_share_median"]))
+            det[leaf] = dict(variant=var, phi_cap=float(r["phi_cap"]), share_cap=float(r["share_cap"]),
+                             se=float(r["se_wcb"]), n=int(r["n_obs"]), admissible=bool(r["M0_admissible"]))
+        add(f"demand.capsens.E{E}", "C", f"The logit of Table 5 at other caps on phi-hat and on the inside "
+            f"share, {rname(E)}", v,
+            "Stage 1 of the cap screen: the full_dtype logit of Table 5 (wild cluster bootstrap inference) "
+            "re-run on the routine's stored demand frame, re-shared at other caps. cap098, cap099, cap0995, "
+            "cap0999: the cap on phi-hat in the active market (1 - min(phi-hat, cap)) M at 0.98, 0.99 "
+            "(production), 0.995 and 0.999 (the screen's p1, production, p2 and p4); dropcap: the production "
+            "frame without the B rows whose phi-hat is at or above the cap 0.99 (p3a); share090, share098: the "
+            "cap on a market's total inside share at 0.90 and 0.98 instead of 0.95 (s1, s2); cap09999, "
+            "cap099999: the phi cap at 0.9999 and 0.99999 (p5, p6), shares only, since their ordinary markets' "
+            "inside share falls below the screen's admissibility floor of 0.01 (M0). Per leaf: alpha, its wild "
+            "cluster bootstrap p, elast = alpha x the frame's mean rho (1 - s); inside, the median over the B "
+            "market-quarters with phi-hat below 0.98 of the sum of their inside shares; outside, the median "
+            "over B market-quarters of the closed-form outside share. cap099 is Table 5's "
+            f"(demand.alpha.logit.E{E}, demand.elast.logit.E{E}); detail: each leaf's variant, caps, standard "
+            "error, rows and M0 verdict",
+            f"{src}, rows of routine E{E}, columns alpha, p, elasticity_mean, inside_sum_phi_lt_098_median, "
+            "outside_share_median", "ok",
+            display="alpha (p): " + ", ".join(f"{leaf} {fmt3s(v[leaf]['alpha'])} ({fmt3s(v[leaf]['p'])})"
+                                              for leaf in CAPSENS_FIT)
+                    + "; inside: " + ", ".join(f"{leaf} {disp(v[leaf]['inside'], 'share')}"
+                                               for leaf in CAPSENS_ADM),
+            detail=dict(variants=det, gate_B_S3=gate.get(f"E{E}")))
+
+
+def collect_findex(notes: list):
+    """demand.findex.constant: the banked fraction the market size uses, FINDEX_FALLBACK of
+    sleep_demand_prep_link.py. The module reads it from the environment at import, so the key is built
+    only without DEMAND_FINDEX_FALLBACK, and only when every routine's newest demand_{k}_*spec_12.parquet
+    shows one banked fraction in every year: no B market-quarter has M_mt x access / Pop below its median
+    over market-quarters, and every year has market-quarters at that median (the floor only raises M_mt;
+    a fraction that moved by year would shift whole years off it)."""
+    import sleep_demand_prep_link as _prep
+    if "DEMAND_FINDEX_FALLBACK" in os.environ:
+        notes.append(f"DEMAND_FINDEX_FALLBACK is set ({os.environ['DEMAND_FINDEX_FALLBACK']}); "
+                     "demand.findex.constant not built.")
+        return
+    fx, frames, bad = float(_prep.FINDEX_FALLBACK), {}, []
+    for E in ROUTINES:
+        fs = sorted(rc.DEMAND_PREP_DIR.glob(f"demand_{E}_*spec_12.parquet"), key=lambda p: p.stat().st_mtime)
+        if not fs:
+            bad.append(f"no demand_{E}_*spec_12.parquet in {rc.DEMAND_PREP_DIR}")
+            continue
+        d = pd.read_parquet(fs[-1], columns=["is_B", "mca_code", "time_id", "year", "M_mt", "_access",
+                                             "pop_total"])
+        b = d[d["is_B"].fillna(False).astype(bool)]
+        mk = b.groupby(["mca_code", "time_id"]).agg(M=("M_mt", "first"), acc=("_access", "first"),
+                                                     pop=("pop_total", "first"), year=("year", "first"))
+        x = mk["M"] * mk["acc"] / mk["pop"]
+        x = x / float(x.median()) - 1.0
+        at = (x.abs() <= 1e-9).to_numpy()
+        off = sorted(set(mk["year"].astype(int)) - set(mk.loc[at, "year"].astype(int)))
+        frames[f"E{E}"] = dict(file=fs[-1].name, market_quarters=int(len(mk)), at_median=int(at.sum()),
+                               below_median=int((x < -1e-9).sum()))
+        if frames[f"E{E}"]["below_median"] or off:
+            bad.append(f"{fs[-1].name}: {frames[f'E{E}']['below_median']} B market-quarters below the median of "
+                       f"M_mt x access / Pop, years with none at it {off}")
+    if bad:
+        notes.append("demand.findex.constant not built: " + "; ".join(bad) + ".")
+        return
+    add("demand.findex.constant", "C", "Banked fraction in the market size: the constant in use", fx,
+        "The banked fraction findex in the anchor of the market size, bc x r-hat x Pop with bc = 1 / (findex "
+        "x access): FINDEX_FALLBACK of sleep_demand_prep_link.py, which today applies to every row of every "
+        "market and quarter. The prep merges the World Bank Global Findex series by year into its input "
+        "(demand.findex.series), but process_specification's keep_cols drops that column before the market "
+        "size is formed, so every row falls back to the constant. The fix, which gives each year its own "
+        "value, is due at the next rebuild. Checked on each routine's newest demand frame: M_mt x access / "
+        "Pop takes one value over the B market-quarters where the market-size floor does not bind, in every "
+        "year (detail.frames)",
+        f"FINDEX_FALLBACK = {fx:g} of sleep_demand_prep_link.py (DEMAND_FINDEX_FALLBACK not set), checked "
+        f"against M_mt, _access and pop_total of " + ", ".join(f["file"] for f in frames.values()),
+        "ok", display=fmt3s(fx), unit="fraction", detail=dict(frames=frames))
+
+
+def collect_findex_series(notes: list):
+    """demand.findex.series: the World Bank Global Findex banked fraction as the demand prep reads it
+    (findex_banked_frac of sleep_demand_prep_link.BANKED_CSV, by MCA and year), in the first and last
+    years of the estimation window. The series is national: the key is built only when it takes one
+    value over the MCAs of every year of the window."""
+    import sleep_demand_prep_link as _prep
+    p = pathlib.Path(_prep.BANKED_CSV)
+    if not p.is_file():
+        notes.append(f"{p} not found; demand.findex.series not built.")
+        return
+    bk = pd.read_csv(p, usecols=["year", "findex_banked_frac"])
+    bk["findex_banked_frac"] = pd.to_numeric(bk["findex_banked_frac"], errors="coerce")
+    by_year, bad = {}, []
+    for y in range(MIN_YEAR, MAX_YEAR + 1):
+        s = bk.loc[bk["year"] == y, "findex_banked_frac"]
+        if s.empty or s.isna().any() or s.nunique() != 1:
+            bad.append(f"{y}: {s.nunique()} values over {len(s)} rows, {int(s.isna().sum())} missing")
+        else:
+            by_year[y] = float(s.iloc[0])
+    if bad:
+        notes.append(f"{p.name} is not one value per year: " + "; ".join(bad)
+                     + "; demand.findex.series not built.")
+        return
+    v = {str(y): by_year[y] for y in (MIN_YEAR, MAX_YEAR)}
+    add("demand.findex.series", "C", f"World Bank Global Findex banked fraction, {MIN_YEAR} and {MAX_YEAR}", v,
+        f"The banked fraction of the World Bank Global Findex as the demand prep reads it: findex_banked_frac "
+        f"of {p.name}, national and linear between survey years, one value over every MCA of a year "
+        f"(checked); leaves {MIN_YEAR} and {MAX_YEAR}, the first and last years of the estimation window "
+        "(every year of it in detail.by_year). The market size does not use the series today: "
+        "process_specification's keep_cols in sleep_demand_prep_link.py drops the column, so every row takes "
+        "the constant demand.findex.constant. The fix is due at the next rebuild",
+        f"{p.parent.name}/{p.name} (LF md5 {_lf_md5(p)[:8]}; sleep_demand_prep_link.BANKED_CSV), column "
+        f"findex_banked_frac, rows of {MIN_YEAR} and {MAX_YEAR}", "ok", unit="fraction",
+        display=", ".join(f"{y} {fmt3s(x)}" for y, x in v.items()),
+        detail=dict(by_year=by_year))
+
+
 def collect_phi_variance(notes: list):
     """How phi-hat_mt spreads across markets and quarters (make_phi_variance.py,
     Rout/phi_variance.json): its variance split, the covariance split of its index, the ceiling."""
@@ -3303,6 +3756,7 @@ def collect_share_cap(notes: list):
     cap is where the BLP contraction's residual stalls at |ln cap|."""
     import sleep_demand_prep_link as _prep
     cap, tol = float(_prep.TOTAL_SHARE_CAP), 1e-9
+    max_sums = {}
     for E in ROUTINES:
         fs = sorted(rc.DEMAND_PREP_DIR.glob(f"demand_{E}_*spec_12.parquet"), key=lambda p: p.stat().st_mtime)
         if not fs:
@@ -3314,6 +3768,7 @@ def collect_share_cap(notes: list):
         is_b = d["is_B"].fillna(False).astype(bool)
         b = d[is_b]
         sums = b.groupby(["mca_code", "time_id"])["share_B_cond"].sum()
+        max_sums[f"E{E}"] = (fs[-1].name, float(sums.max()))
         if (sums > cap + tol).any():
             notes.append(f"E{E}: {int((sums > cap + tol).sum())} B market-quarters sum above the cap "
                          f"{cap}; the parquet is not the one the prep floored.")
@@ -3347,6 +3802,26 @@ def collect_share_cap(notes: list):
             f"Demand rows (bank x market x deposit type x quarter) in a market at the cap {cap}; the "
             "detail splits them by deposit type", src, "ok", display=disp(rs, "share"),
             unit="fraction", detail=detail)
+    # The cap itself, once, so the text quotes it from a key. The module reads the cap from the
+    # environment at import, so an override set here would describe this run, not the frames: the
+    # key is built only without one, and only when every routine's parquet was floored at this cap
+    # (its largest B market-quarter sum equals the cap).
+    if "DEMAND_TOTAL_SHARE_CAP" in os.environ:
+        notes.append(f"DEMAND_TOTAL_SHARE_CAP is set ({os.environ['DEMAND_TOTAL_SHARE_CAP']}); "
+                     "demand.sharecap.cap not built.")
+    elif not max_sums:
+        notes.append("no demand parquet to check the inside-share cap against; demand.sharecap.cap not built.")
+    elif any(abs(v - cap) > tol for _, v in max_sums.values()):
+        notes.append(f"a demand parquet was not floored at TOTAL_SHARE_CAP = {cap} (largest B market-quarter "
+                     f"sums: {max_sums}); demand.sharecap.cap not built.")
+    else:
+        add("demand.sharecap.cap", "C", "Cap on a market's total inside share", cap,
+            "The cap on the sum of a market's inside shares, imposed by the market-size floor "
+            "M >= sum of Dep_Act / ((1 - phi) x cap) in the demand prep",
+            f"TOTAL_SHARE_CAP = {cap} of sleep_demand_prep_link.py, checked against the largest B "
+            f"market-quarter sum of share_B_cond in " + ", ".join(n for n, _ in max_sums.values()),
+            "ok", display=f"{cap:g}", unit="fraction",
+            detail=dict(cap=cap, largest_b_sum={k: v for k, (_, v) in max_sums.items()}))
 
 
 def collect_phi_cap(notes: list):
@@ -3356,18 +3831,25 @@ def collect_phi_cap(notes: list):
     active balance of (14-B) uses phi uncapped. Counted on the newest demand_{k}_*spec_12.parquet of
     each routine: the share of B demand rows whose phi_mt is at or above the cap, unweighted and
     weighted by the deposit balance."""
+    import pyarrow.parquet as _pq
     import sleep_demand_prep_link as _prep
     cap = float(_prep.PHI_CAP)
+    cap_dev = {}
     for E in ROUTINES:
         fs = sorted(rc.DEMAND_PREP_DIR.glob(f"demand_{E}_*spec_12.parquet"), key=lambda p: p.stat().st_mtime)
         if not fs:
             notes.append(f"no demand_{E}_*spec_12.parquet in {rc.DEMAND_PREP_DIR}; "
                          f"demand.phicap.*.E{E} not built.")
             continue
+        has_1mphi = "_1mphi" in _pq.read_schema(fs[-1]).names
         d = pd.read_parquet(fs[-1], columns=["mca_code", "time_id", "deposit_type", "is_B", "phi_mt",
-                                             "phi_t", "deposit_balance"])
+                                             "phi_t", "deposit_balance"] + (["_1mphi"] if has_1mphi else []))
         is_b = d["is_B"].fillna(False).astype(bool)
         b = d[is_b]
+        if has_1mphi:
+            # the capped phi the prep used, 1 - _1mphi, against phi_mt capped at this PHI_CAP
+            cap_dev[f"E{E}"] = (fs[-1].name, float(np.nanmax(np.abs(
+                (1.0 - b["_1mphi"].astype(float)) - b["phi_mt"].astype(float).clip(0.0, cap)))))
         at = (b["phi_mt"] >= cap).to_numpy()
         w = b["deposit_balance"].astype(float).to_numpy()
         rows, dep = float(at.mean()), float(np.average(at, weights=w))
@@ -3391,6 +3873,26 @@ def collect_phi_cap(notes: list):
             f"cap, {rname(E)}", dep,
             f"As demand.phicap.rows.E{E}, each row weighted by its deposit balance",
             src, "ok", display=disp(dep, "share"), unit="fraction", detail=detail)
+    # The cap itself, once, so the text quotes it from a key. The module reads the cap from the
+    # environment at import, so the key is built only without an override, and only when every
+    # routine's parquet formed its active market with this cap (1 - _1mphi = min(phi_mt, cap) on
+    # every B row, to 1e-12).
+    if "DEMAND_PHI_CAP" in os.environ:
+        notes.append(f"DEMAND_PHI_CAP is set ({os.environ['DEMAND_PHI_CAP']}); demand.phicap.cap not built.")
+    elif not cap_dev:
+        notes.append("no demand parquet with _1mphi to check the phi cap against; demand.phicap.cap not built.")
+    elif any(v > 1e-12 for _, v in cap_dev.values()):
+        notes.append(f"a demand parquet was not capped at PHI_CAP = {cap} (max |1 - _1mphi - min(phi_mt, cap)|: "
+                     f"{cap_dev}); demand.phicap.cap not built.")
+    else:
+        add("demand.phicap.cap", "C", "Cap on phi in the active market", cap,
+            "The cap on phi-hat in the active market (1 - min(phi, cap)) M: in the anchor r-hat, the "
+            "market-size floor and the share denominators, for B rows (phi_mt) and D rows (phi_t); "
+            "the active balance (14-B) uses phi uncapped",
+            f"PHI_CAP = {cap} of sleep_demand_prep_link.py, checked against _1mphi on the B rows of "
+            + ", ".join(n for n, _ in cap_dev.values()),
+            "ok", display=f"{cap:g}", unit="fraction",
+            detail=dict(cap=cap, max_abs_dev_b={k: v for k, (_, v) in cap_dev.items()}))
 
 
 def collect_xi_diagnostics(notes: list):
@@ -4288,16 +4790,19 @@ FAMILIES = {
               "collect_k2b", "collect_k0", "collect_k2_world", "collect_k2_rc", "collect_k2_steps56", "collect_k1",
               "collect_k1_pilots",
               "collect_pix_adv",
-              "collect_pix_stakes", "collect_gap4", "collect_pix_roster", "collect_big5_branches"),
+              "collect_pix_stakes", "collect_gap4", "collect_pix_roster", "collect_big5_branches",
+              "collect_lambda_registry", "collect_netflow_gap"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
                 "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
                 "collect_first_stage_strength", "collect_xi_diagnostics", "collect_share_cap",
                 "collect_phi_cap",
                 "collect_phi_variance",
                 "collect_active_truncation", "collect_entry_carry",
-                "collect_type5_robustness", "collect_cluster_imbalance", "collect_tr5"),
+                "collect_type5_robustness", "collect_cluster_imbalance", "collect_tr5",
+                "collect_cap_screen", "collect_findex"),
     "bbl": ("collect_bbl", "collect_polfunc", "collect_phi_path", "collect_design"),
-    "local": ("collect_fees", "collect_ccs", "collect_tax_clock"),   # side files outside the panel; never pending
+    "local": ("collect_fees", "collect_ccs", "collect_tax_clock",   # side files outside the panel; never pending
+              "collect_findex_series"),
 }
 for _fam, _names in FAMILIES.items():
     for _name in _names:
@@ -4377,6 +4882,11 @@ def main():
     collect_gap4(notes)
     collect_pix_roster(notes)
     collect_big5_branches(notes)
+    collect_lambda_registry(notes)
+    collect_netflow_gap(notes)
+    collect_cap_screen(notes)
+    collect_findex(notes)
+    collect_findex_series(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

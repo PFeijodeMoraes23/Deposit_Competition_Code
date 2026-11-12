@@ -2,53 +2,9 @@
 
 **To:** the IMPR session (the main agent). **From:** the main thread, for Pedro; written 11-04 23:05, consolidated 11-05 00:10. **Scope.** On 11-05 Pedro sends you one command and you run everything below, spawning one subagent per thread (Kappa, Pix, tables) briefed from the thread section here. The four thread handoffs (`impr_handoff_2026-11-03.md`, `kappa_handoff_2026-11-03.md`, `pix_handoff_2026-11-04.md`, `tables_handoff_2026-11-04.md`) were deleted on 11-05 at Pedro's instruction; this brief is self-contained. Their rules are in Section 0, their approved script changes (with LF md5s) in each thread section, the I10 map in Section 2, and their decisions in `SHARED_MEMORY.md`. `SHARED_MEMORY.md` entries 11-04 19:00 to 23:00 are the record of last evening. Nothing below edits `V_Friction.tex`.
 
-## Update 11-08 21:30 (main thread): Pedro's go on TR5 (cluster) and cleanup round 2; K1 pilot keys still open. See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
+## Update 11-12 (main thread): the reply in force is `MAIN_REPLY_2026-11-12.md`
 
-## Update 11-08 21:27 (main thread): K1 option (iii), promote the pilot outputs and add seven kappa.k1.pilot keys. See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
-
-## Update 11-08 00:35 (main thread): two keys on the five largest conglomerates' branch presence (2019Q4). See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
-
-## Update 11-08 00:11 (main thread): four paper keys from R1 (Pix mandate and B savings). See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
-
-## Update 11-07 22:05 (main thread): macros received, text check done, five questions. See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
-
-## Update 11-07 21:50 (main thread): K1-S, the smooth effect solve (plan first, flag default off), then re-pilot three forms including the matured scale. See the end of `MAIN_REPLY_2026-11-05.md`.
-
-## Update 11-07 21:36 (main thread): read the section of the same date at the end of `MAIN_REPLY_2026-11-05.md`
-
-After refresh phase 2: one table of the changed, missing and stale keys quoted in V_Friction or the paper plan, and the sentences whose words depend on them. The main thread's views on K1 (option (i) first) and on the BLP stage for counterfactuals (ext1).
-
-## Update 11-05 19:35 (main thread): read `MAIN_REPLY_2026-11-05.md` (consolidated)
-
-All main-thread replies now live in one file, `MAIN_REPLY_2026-11-05.md`, which keeps only what is in force or open. Files a to e are to be deleted, and pointers to them below are historical. From your next update, the threads write to fresh reply files dated 11-06.
-
-## Update 11-05 19:05 (main thread): read `MAIN_REPLY_2026-11-05e.md`
-
-T12 and the Nubank basis are accepted. T13 adds five row-label keys for `tab:k2_breaks`.
-
-## Update 11-05 18:20 (main thread): read `MAIN_REPLY_2026-11-05d.md`
-
-The Kappa agent respecifies K1, which Pedro approved under D1 and D2: no clock on the own pool, matured money in the checking pair, a per-pair time-deposit term, two exit coefficients, `--lambda-one`, and test 2 regenerated. The tables agent adds the T12 keys (K2 steps 5 and 6). Choices (a) to (h) are confirmed by Pedro (18:35) as recommended.
-
-## Update 11-05 15:10 (main thread): read `MAIN_REPLY_2026-11-05c.md`
-
-T11 accepted. One rule for the tables agent on Nubank's posted-rate basis (100 percent unless the 20-F average covers the whole RDB stock). S4 rewritten on the T11 keys.
-
-## Update 11-05 14:45 (main thread): read `MAIN_REPLY_2026-11-05b.md`
-
-T11 for the tables agent (keys for the T10b B versus D gap), the Section 2.3 paper blocks (S0 to S5) written, and the main thread's recommendation on Bradesco 2016 (A plus the merger adjustment, at the next rebuild, Pedro to confirm).
-
-## Update 11-05 13:00 (main thread)
-
-`MAIN_REPLY_2026-11-05a.md` gained an addendum on top: T10b for the tables agent, posted rates against the panel's B and D rates, read only, in the T10 slot; the registry check on 11-13 is added to the B-registry item below.
-
-## Update 11-05 12:35 (main thread): read `MAIN_REPLY_2026-11-05a.md`
-
-One file answers everything asked since 11:00: the K1 decisions for the Kappa agent (full window headline, carried rows out, sparse advertising dropped, score bootstrap locally and refit on Bouchet, I2's frames, `kappa/` folder, omega on `fa38794d`), a new task T10 for the tables agent (refresh the `slide.*` motivating-fact keys on `fa38794d`), Pix closed, and the paper flags for Pedro.
-
-## Update 11-05 (main thread, after `ALL_REPLIES_2026-11-05.md` of 10:50)
-
-Read and accepted: D1 (+4 pp above the CDI or below half of it, B and D as run), D2 (99 shuffles), D3 (I2 after I17); I17 done, panel **`fa38794dcb3bed514358d3c2406f82ab`** (the `fa38794d` end line replaces `0b9385b5` for P8, the restage and I2); the Kappa record (steps 3 and 4 complete and already read into the design note; steps 5 and 6 resume from `k2n_ctx_full.pkl`, no panel needed); K-key done (0.0177); K7 waits for P8; P-shuffle coded (LF `02173437`, `14ce1594`); T7 done (`a8796a21`). Answers: (i) tables, keep the F statistics as integer keys (`\pn{}`), do not switch W5 to `\pn[0]`; the net-of-structure placebo keys are not needed. (ii) The machine order stands: P8, step 7, K-resume. (iii) Step 7's `--out` as an absolute path is right. (iv) Pix's and tables' scratch Remove-Item lines run after Pedro has read the final reply of the day. Nothing else changes in the sections below.
+The update lines of 11-05 to 11-11 that stood here pointed to `MAIN_REPLY_2026-11-05.md`. That file was closed and deleted on 11-12 at Pedro's request, and its history is in the log of `SHARED_MEMORY.md`. Read `MAIN_REPLY_2026-11-12.md` for the work in order. The sections below are the brief of 11-05, kept for the rules of Section 0 and the map of the pipeline. Where they describe tasks, most are done or parked.
 
 ## 0. Rules that carry over
 
