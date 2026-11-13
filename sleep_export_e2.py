@@ -208,7 +208,7 @@ def build_second_stage_table(results_dict):
         return entry.get('second_stage') if isinstance(entry, dict) else None
 
     all_vars = [
-        'constant', 'pix_exists', 'risk_free_qoq_lag',
+        'constant', 'pix_exists', 'pix_use', 'pix_use_cf', 'risk_free_qoq_lag',
         'gdp_per_capita', 'cadunico_families_per1000',
         'fraction_65plus', 'fraction_young', 'connections_per100',
     ]

@@ -304,24 +304,70 @@ def run() -> dict:
 
 
 # ── C4c ──────────────────────────────────────────────────────────────────────
-def m3(v) -> str:
-    return f"${f3(v)}$"
+def _em(s: str) -> float:
+    """Width in em of a printed number in the paper's Latin Modern: a digit 0.5, the point 0.278,
+    the minus sign (math mode) 0.778."""
+    return sum({".": 0.278, "-": 0.778}.get(ch, 0.5) for ch in s)
+
+
+INTERVAL_MAX_EM = 12.0      # a wider interval would reach the next one (see _cell)
+
+
+def _block_widths(rows) -> list:
+    """Per numeric column, the widest printed number of the panel, in em."""
+    w = [0.0] * 6
+    for _label, cells in rows:
+        for j, c in enumerate(cells):
+            if c is not None and c[0] == "num":
+                w[j] = max(w[j], _em(c[1]))
+    return w
+
+
+def _cell(c, w: float) -> str:
+    """One numeric cell. A number is right-aligned in a block of the panel's column width `w`: every
+    number has three decimals, so the points line up, and the block is centred under its header. A
+    dash is centred in the same block. An interval is set in a zero-width box centred on the
+    column: it overhangs the empty cells beside it and cannot wrap."""
+    if c is None:
+        return ""
+    if c[0] == "num":
+        return rf"\makebox[{w:.3f}em][r]{{${c[1]}$}}"
+    if c[0] == "dash":
+        return rf"\makebox[{w:.3f}em][c]{{--}}"
+    if _em(c[1]) + _em(c[2]) + 1.167 > INTERVAL_MAX_EM:
+        sys.exit(f"interval [{c[1]}, {c[2]}] is wider than {INTERVAL_MAX_EM} em")
+    return rf"\makebox[0pt]{{\mbox{{[${c[1]}$, ${c[2]}$]}}}}"
 
 
 def table(r: dict) -> str:
+    """The table in a table[htpb] float: six equal columns after the label. Panel A has Mean, SD, an
+    empty spacer column and the three correlations (the diagonal a dash); Panel B has a slope and
+    an F per usage measure, with the interval under the slope."""
     mom, fs = r["moments"], r["fs"]
-    a = [f"\\quad {LABELS[e]} & {m3(mom[e]['mean'])} & {m3(mom[e]['sd'])} & "
-         + " & ".join(m3(mom[e]["corr"][o]) for o in EXPOSURES) + r" \\" for e in EXPOSURES]
+
+    def num(v):
+        return ("num", f3(v))
+
+    a = [(LABELS[e], [num(mom[e]["mean"]), num(mom[e]["sd"]), None]
+          + [("dash",) if o == e else num(mom[e]["corr"][o]) for o in EXPOSURES])
+         for e in EXPOSURES]
     b = []
     for e in EXPOSURES:
-        b.append(f"\\quad {LABELS[e]} & " + " & ".join(
-            f"{m3(fs[k][e]['slope'])} & {f3(fs[k][e]['f'])}" for k in MEASURES) + r" \\")
-        b.append(r"\quad & " + " & ".join(
-            f"[{m3(fs[k][e]['lo'])}, {m3(fs[k][e]['hi'])}] &" for k in MEASURES)[:-1] + r" \\")
-    b.append(r"\quad Joint $F$, three exposures & " + " & ".join(
-        f" & {f3(fs[k]['joint_f'])}" for k in MEASURES) + r" \\")
-    b.append(r"\quad Joint $F$, state clusters & " + " & ".join(
-        f" & {f3(fs[k]['joint_f_state'])}" for k in MEASURES) + r" \\")
+        b.append((LABELS[e], [c for k in MEASURES
+                              for c in (num(fs[k][e]["slope"]), num(fs[k][e]["f"]))]))
+        b.append(("", [c for k in MEASURES
+                       for c in (("ci", f3(fs[k][e]["lo"]), f3(fs[k][e]["hi"])), None)]))
+    b.append((r"Joint $F$, three exposures",
+              [c for k in MEASURES for c in (None, num(fs[k]["joint_f"]))]))
+    b.append((r"Joint $F$, state clusters",
+              [c for k in MEASURES for c in (None, num(fs[k]["joint_f_state"]))]))
+
+    def rows(panel) -> list:
+        w = _block_widths(panel)
+        return [rf"\quad {lab}".rstrip() + " & "
+                + " & ".join(_cell(c, w[j]) for j, c in enumerate(cells)) + r" \\"
+                for lab, cells in panel]
+
     s = r["sample"]
     note = (r"\textit{Notes:} Usage: Pix transactions sent by individuals, distinct individual "
             r"payers, and real value sent by individuals (2024Q4 reais), per inhabitant, by "
@@ -337,27 +383,28 @@ def table(r: dict) -> str:
             r"of the slope, and the joint $F$ of the three exposures in one regression. Intervals: "
             r"95 percent, clustered by MCA. "
             f"{s['n_mca']:,} MCAs, {s['n_quarters']} quarters.")
-    head_a = (r" & Mean & SD & \multicolumn{3}{c}{Correlation with} & \\" + "\n"
-              + r" & & & Mandated & Mobile & 4G/5G & \\")
+    head_a = (r" & & & & \multicolumn{3}{c}{Correlation with} \\" + "\n"
+              + r"\cmidrule(lr){5-7}" + "\n" + r" & Mean & SD & & Mandated & Mobile & 4G/5G \\")
     head_b = (r" & \multicolumn{2}{c}{Transactions} & \multicolumn{2}{c}{Payers} & "
               r"\multicolumn{2}{c}{Value} \\" + "\n" + r"\cmidrule(lr){2-3} \cmidrule(lr){4-5} "
               r"\cmidrule(lr){6-7}" + "\n" + r" & Slope & $F$ & Slope & $F$ & Slope & $F$ \\")
-    col = r"@{}X" + r">{\raggedleft\arraybackslash}p{1.65cm}" * 6 + r"@{}"
+    # 1.65 cm (46.9 pt) holds the widest header, "Mandated" (44.2 pt at 10 pt), and the widest block.
+    col = r"@{}X" + r">{\centering\arraybackslash}p{1.65cm}" * 6 + r"@{}"
     return "\n".join([
         "% tab_pix_exposure_fs.tex -- GENERATED by make_pix_exposure.py. Do not edit.",
+        r"\begin{table}[htpb]",
         r"\begin{spacing}{1.0}", r"\footnotesize", r"\setlength{\tabcolsep}{3pt}",
-        r"\par\addvspace{\LTpre}\noindent\begin{minipage}{\textwidth}\captionsetup{position=top}",
-        r"\captionof{table}{Pix Usage and Pre-Launch Exposure}\label{tab:pix_exposure_fs}",
+        r"\captionsetup{position=top}",
+        r"\caption{Pix Usage and Pre-Launch Exposure}\label{tab:pix_exposure_fs}",
         rf"\begin{{tabularx}}{{\textwidth}}{{{col}}}", r"\toprule",
         r"\multicolumn{7}{@{}l}{\textit{A. Exposure moments}} \\",
         head_a,
-        r"\midrule", *[x.replace(r" \\", r" & \\") for x in a], r"\midrule",
-        r"\multicolumn{7}{@{}l}{\textit{B. First stage}} \\", head_b, r"\midrule", *b,
+        r"\midrule", *rows(a), r"\midrule",
+        r"\multicolumn{7}{@{}l}{\textit{B. First stage}} \\", head_b, r"\midrule", *rows(b),
         r"\bottomrule",
         rf"\multicolumn{{7}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}"
         rf"{{\footnotesize {note}}} \\",
-        r"\end{tabularx}", r"\end{minipage}\par\prevdepth=0pt\addvspace{\LTpost}",
-        r"\end{spacing}", ""])
+        r"\end{tabularx}", r"\end{spacing}", r"\end{table}", ""])
 
 
 def main():

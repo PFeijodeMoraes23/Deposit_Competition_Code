@@ -1165,7 +1165,7 @@ def main():
         n_mca = mkt["mca_code"].nunique()
         n_q = mkt[["year", "quarter"]].drop_duplicates().shape[0]
         per_year = mkt.groupby("year").size() / mkt.groupby("year")["quarter"].nunique()
-        coverage = (f"An MCA enters a quarter when at least one B firm reports deposits there; their "
+        coverage = (f"An MCA enters a quarter when at least one $\mathrm{{B}}$ firm reports deposits there; their "
                     f"number falls from {per_year.iloc[0]:,.0f} in {per_year.index[0]} to "
                     f"{per_year.iloc[-1]:,.0f} in {per_year.index[-1]} (quarterly averages), so the "
                     f"{n_mca:,} MCAs average {len(mkt) / n_mca:.0f} of the {n_q} quarters.")

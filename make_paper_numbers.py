@@ -1303,7 +1303,9 @@ def _tsv_cell(label: str, col: int):
 
 def collect_state_selection(notes: list):
     """The state-vector appendix table (make_state_vector_table.py, from its unrounded sidecar): the
-    design diagnostics of the eq. (13) regressors and the shares absorbed by the fixed effects."""
+    design diagnostics of the eq. (13) regressors and the shares absorbed by the fixed effects. A
+    state the sidecar lists under `not_in_table` (the 4G/5G share, which the prose cites as the
+    reason it is left out) has its share here but no printed cell, so it carries no cross-check."""
     sc = _paths.rout_dir() / "tab_state_vector_map.json"
     if not sc.is_file():
         notes.append(f"{sc.name} not found; run diagnostics/diag_state_vector_selection.py, then "
@@ -1324,15 +1326,20 @@ def collect_state_selection(notes: list):
                 f"(diagnostics/diag_state_vector_selection.py, {blk})", f"{src} design[{blk}]",
                 "ok", display=disp(d[stat]),
                 checks=[check_cell(TSV, f"Panel B, {lab}, {what}", _tsv_cell(lab, col), [d[stat]])])
+    off_table = set(side.get("not_in_table") or [])
     for state, (key, lab) in SSEL_STATES.items():
         a = (side.get("absorbed_alone") or {}).get(state)
         if a is None:
             continue
+        printed = state not in off_table
+        where = f"{src} absorbed_alone[{state}]"
+        if not printed:
+            where += " (sidecar only, not printed)"
         add(f"sleep.ssel.absorbed.{key}", "K", f"Share of {state} absorbed by the fixed effects", a,
             "One minus the ratio of the state's variance net of entity and quarter fixed effects to "
-            "its raw variance, specification (12) sample", f"{src} absorbed_alone[{state}]", "ok",
+            "its raw variance, specification (12) sample", where, "ok",
             display=disp(a, "share"),
-            checks=[check_cell(TSV, f"Panel A, {lab}", _tsv_cell(lab, 2), [a])])
+            checks=[check_cell(TSV, f"Panel A, {lab}", _tsv_cell(lab, 2), [a])] if printed else [])
 
 
 def collect_state_levels(notes: list):
@@ -3148,6 +3155,19 @@ P3_F_FIELDS = {"f": "f", "f_placebo": "f_placebo", "f_net": "f_net"}
 # state), in the entries whose P3 run wrote them.
 P3_F_FIELDS_STATE = {"f_state": "f_state", "f_net_state": "f_net_state",
                      "f_placebo_state": "f_placebo_state"}
+# Leaf -> field, in the entries whose P3 run wrote them, of pix.stakes.fs.perm (the slope of log sd
+# on log sd~ against the same draws' slopes) and pix.stakes.fs.rc (the recentred instrument of
+# Borusyak and Hull, 2023). Unrounded; the counts are integers.
+P3_PERM_FIELDS = {"slope": "perm_slope", "median": "perm_slope_median", "max": "perm_slope_max",
+                  "n_ge": "perm_n_ge", "p": "perm_p",
+                  "slope_net": "perm_slope_net", "median_net": "perm_slope_net_median",
+                  "max_net": "perm_slope_net_max", "n_ge_net": "perm_n_ge_net", "p_net": "perm_p_net"}
+P3_RC_FIELDS = {"slope": "rc_slope", "se_ri": "rc_se_ri", "t_ri": "rc_t_ri", "f_ri": "rc_f_ri",
+                "p_ri": "rc_p_ri", "n_abs_ge": "rc_n_abs_ge", "f": "rc_f", "f_state": "rc_f_state",
+                "slope_net": "rc_slope_net", "se_ri_net": "rc_se_ri_net", "t_ri_net": "rc_t_ri_net",
+                "f_ri_net": "rc_f_ri_net", "p_ri_net": "rc_p_ri_net", "n_abs_ge_net": "rc_n_abs_ge_net",
+                "f_net": "rc_f_net", "f_net_state": "rc_f_net_state", "corr_z_mu": "rc_corr_z_mu"}
+P3_COUNT_LEAVES = {"n_ge", "n_ge_net", "n_abs_ge", "n_abs_ge_net"}
 
 
 def collect_pix_stakes(notes: list):
@@ -3158,7 +3178,9 @@ def collect_pix_stakes(notes: list):
     unrounded values are in the entry's detail. With more than one placebo shuffle, f_placebo is
     the shuffles' median F and fs.placebo_share_above the share of shuffles whose F is at or
     above the real one (placebo_share_ge). fs.f_state, f_net_state, f_placebo_state and
-    placebo_share_above_state are the same with state clusters, on the same draws."""
+    placebo_share_above_state are the same with state clusters, on the same draws. Two more entries
+    from the same draws: pix.stakes.fs.perm (the slope against the draws' slopes) and
+    pix.stakes.fs.rc (the recentred instrument and its randomization inference), unrounded."""
     rout = _paths.rout_dir()
     csv = rout / "p3_stakes_mca_quarter.csv"
     if not csv.is_file():
@@ -3217,6 +3239,46 @@ def collect_pix_stakes(notes: list):
                 + (f"; state clusters: F {v['fs']['f_state']}, placebo {v['fs']['f_placebo_state']} "
                    f"(share above {fmt3s(v['fs']['placebo_share_above_state'])}), net "
                    f"{v['fs']['f_net_state']}" if state else ""))
+    src = (f"Rout/p3_numbers.json panels.{md5} (diagnostics/diag_p3_numbers.py; panel "
+           f"{e['panel_md5']}, P3 run {e['written']}), the panel of Rout/{csv.name}")
+
+    def vals(fields):
+        return {k: int(e[f]) if k in P3_COUNT_LEAVES else float(e[f]) for k, f in fields.items()}
+    if shuffles > 1 and all(f in e for f in P3_PERM_FIELDS.values()):
+        vp = dict(vals(P3_PERM_FIELDS), draws=shuffles)
+        add("pix.stakes.fs.perm", "T", "Stakes first stage: the slope against the permuted slopes (P3)", vp,
+            "slope: the slope of log sd on log sd~ (the cost shifters), MCA and quarter effects (the "
+            f"regression of fs.f); median, max: of the slopes over the {shuffles} draws of the placebo "
+            f"(rho~ shuffled across conglomerates within the quarter, seed {e.get('placebo_seed')}); "
+            "n_ge: draws with a slope at or above slope; p = (1 + n_ge) / (1 + draws); _net: the same "
+            "net of lagged HHI and number of banks; draws: the number of draws",
+            src, "ok",
+            display=f"slope {fmt3s(vp['slope'])} against {shuffles} draws (median {fmt3s(vp['median'])}, "
+                    f"max {fmt3s(vp['max'])}): {vp['n_ge']} at or above, p {fmt3s(vp['p'])}; net "
+                    f"{fmt3s(vp['slope_net'])} (median {fmt3s(vp['median_net'])}, max "
+                    f"{fmt3s(vp['max_net'])}): {vp['n_ge_net']}, p {fmt3s(vp['p_net'])}")
+    else:
+        notes.append(f"p3_numbers.json panels.{md5} has no permutation of the slopes; "
+                     "pix.stakes.fs.perm.* absent.")
+    if shuffles > 1 and all(f in e for f in P3_RC_FIELDS.values()):
+        vr = vals(P3_RC_FIELDS)
+        add("pix.stakes.fs.rc", "T", "Stakes first stage, recentred instrument (P3)", vr,
+            "The instrument log sd~ minus mu, the mean of the draws' log sd~ (its expectation under "
+            "the permutation of rho~ within the quarter; Borusyak and Hull, 2023). slope: log sd on it, "
+            "MCA and quarter effects; f, f_state: its F with MCA and with state clusters; se_ri: the "
+            "standard deviation of the slopes on the recentred draws (each draw's log sd~ minus mu); "
+            "t_ri = slope / se_ri; f_ri = t_ri squared; n_abs_ge: draws with an absolute slope at or "
+            "above |slope|; p_ri = (1 + n_abs_ge) / (1 + draws); _net: the same net of lagged HHI and "
+            "number of banks; corr_z_mu: the correlation of log sd~ and mu. Unrounded",
+            src, "ok",
+            display=f"slope {fmt3s(vr['slope'])}, se_ri {fmt3s(vr['se_ri'])}, t_ri {fmt3s(vr['t_ri'])} "
+                    f"(F {fmt3s(vr['f_ri'])}), p_ri {fmt3s(vr['p_ri'])}; F {fmt3s(vr['f'])} (MCA), "
+                    f"{fmt3s(vr['f_state'])} (state); net: slope {fmt3s(vr['slope_net'])}, t_ri "
+                    f"{fmt3s(vr['t_ri_net'])}, p_ri {fmt3s(vr['p_ri_net'])}, F {fmt3s(vr['f_net'])} / "
+                    f"{fmt3s(vr['f_net_state'])}; corr(z, mu) {fmt3s(vr['corr_z_mu'])}")
+    else:
+        notes.append(f"p3_numbers.json panels.{md5} has no recentred instrument; "
+                     "pix.stakes.fs.rc.* absent.")
 
 
 # The B versus D type-4 gap of T10b (diagnostics/diag_t10b_rate_gap.py): the panel its keys read

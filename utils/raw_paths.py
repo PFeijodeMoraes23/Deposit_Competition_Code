@@ -26,6 +26,7 @@ BCB_MONETARY_AGGREGATES_SGS = DATA_RAW / "BCB" / "monetary_aggregates_sgs"     #
 BCB_TARIFAS_MONTHLY = DATA_RAW / "BCB" / "tarifas_monthly"                     # fees/scrape_bcb_tarifas_monthly.py
 BCB_TARIFAS_LAI = DATA_RAW / "BCB" / "tarifas_lai_18810_025439" / "raw"        # LAI delivery 2026-10-27 (same files)
 BCB_TARIFAS_WAYBACK = DATA_RAW / "BCB" / "tarifas_wayback"                     # old tariff pages: CDX list, sample
+BCB_REGISTRY_025440 = DATA_RAW / "BCB" / "registry_025440"                     # LAI delivery 2026-11-13 (diagnostics/diag_lai025440_rates.py)
 
 # Ipeadata
 IPEADATA_IBOVESPA = DATA_RAW / "Ipeadata" / "ibovespa"                         # scrape_national_series.py (Ipeadata)

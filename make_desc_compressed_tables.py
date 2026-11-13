@@ -624,9 +624,9 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix, t
         return lines
 
     body = []
-    body += _panel("Panel A: Brick-and-Mortar (B) Firms",
+    body += _panel("Panel A: Brick-and-Mortar ($\mathrm{B}$) Firms",
                    moments_b, meta["n_firms_B"], meta["n_firm_quarters_B"])
-    body += _panel("Panel B: Digital (D) Firms",
+    body += _panel("Panel B: Digital ($\mathrm{D}$) Firms",
                    moments_d, meta["n_firms_D"], meta["n_firm_quarters_D"])
 
     # The closing \par sits inside the group so the note is set single-spaced in
@@ -636,12 +636,12 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix, t
             f"Conglomerate-quarters, {MIN_YEAR}Q1--{MAX_YEAR}Q4; deposits summed across MCAs.",
             NOTE_MONEY,
             r"Zero balances (product not offered) are excluded, so $N$ varies by row; "
-            f"{meta['n_firms_B_no_savings']} of {meta['n_firms_B']} B conglomerates never offer "
+            f"{meta['n_firms_B_no_savings']} of {meta['n_firms_B']} $\mathrm{{B}}$ firms never offer "
             f"savings. Type 5 from {t5['start']}.",
             r"Spreads are deposit-weighted within firm-quarter and type.",
             NOTE_SPREAD,
             t5["spread_note"],
-            f"Panel B includes {meta['n_firms_D_no_deposits']} D conglomerates that never take "
+            f"Panel B includes {meta['n_firms_D_no_deposits']} $\mathrm{{D}}$ firms that never take "
             r"deposits (credit, finance and leasing firms); they enter only the assets and "
             r"equity rows.",
         ) + r"\par}"
@@ -1032,14 +1032,14 @@ def render_table2a(t2_df, weight_col, suffix, t5) -> str:
     unit_b = f"({SPREAD_UNIT})"
     notes = NOTE_FONT + " " + table_note(
         f"Annual means of quarterly values, {MIN_YEAR}--{MAX_YEAR}, except where stated.",
-        r"Panel A: No.\ B Firms counts conglomerates with positive deposits in the MCA-quarter "
-        r"and HHI (B) is the within-MCA HHI of B deposits, both averaged across MCA-quarters "
-        r"weighted by MCA deposits; No.\ D Firms counts the distinct D conglomerates with "
-        r"positive deposits in any quarter of the year; HHI (B+D) is the national HHI of "
-        r"deposits summed over the year; $N$ counts MCA-quarters with B presence.",
+        r"Panel A: No.\ $\mathrm{B}$ Firms counts conglomerates with positive deposits in the MCA-quarter "
+        r"and HHI ($\mathrm{B}$) is the within-MCA HHI of $\mathrm{B}$ deposits, both averaged across MCA-quarters "
+        r"weighted by MCA deposits; No.\ $\mathrm{D}$ Firms counts the distinct $\mathrm{D}$ firms with "
+        r"positive deposits in any quarter of the year; HHI ($\mathrm{B}+\mathrm{D}$) is the national HHI of "
+        r"deposits summed over the year; $N$ counts MCA-quarters with $\mathrm{B}$ presence.",
         r"Panel B: SELIC is the mean quarterly rate compounded to an annual rate.",
         NOTE_SPREAD,
-        r"B spreads are deposit-weighted within and across MCA-quarters, D spreads across "
+        r"$\mathrm{B}$ spreads are deposit-weighted within and across MCA-quarters, $\mathrm{D}$ spreads across "
         r"firm-quarters.",
         t5["spread_note"] if t5["omit"] else
         f"Type 5 from {t5['start']} ({t5['year']} covers {t5['year_span']}). {t5['fallback']}",
@@ -1047,16 +1047,16 @@ def render_table2a(t2_df, weight_col, suffix, t5) -> str:
     if t5["omit"]:
         head_b = [r" & & \multicolumn{2}{c}{\textit{Spread (4)}} & & \\",
                   r"\cmidrule(lr){3-4}",
-                  r"Year & SELIC & B Firms & D Firms & & \\",
+                  r"Year & SELIC & $\mathrm{B}$ Firms & $\mathrm{D}$ Firms & & \\",
                   r" & (\% p.a.) & " + " & ".join([unit_b] * 2) + r" & & \\"]
     else:
         head_b = [r" & & \multicolumn{2}{c}{\textit{Spread (4)}} & \multicolumn{2}{c}{\textit{Spread (5)}} \\",
                   r"\cmidrule(lr){3-4} \cmidrule(lr){5-6}",
-                  r"Year & SELIC & B Firms & D Firms & B Firms & D Firms \\",
+                  r"Year & SELIC & $\mathrm{B}$ Firms & $\mathrm{D}$ Firms & $\mathrm{B}$ Firms & $\mathrm{D}$ Firms \\",
                   r" & (\% p.a.) & " + " & ".join([unit_b] * 4) + r" \\"]
 
     tex = "\n".join([
-        r"\begin{table}[htbp]",
+        r"\begin{table}[htpb]",
         r"\setstretch{1.0}",
         r"\centering",
         r"\begin{threeparttable}",
@@ -1066,10 +1066,10 @@ def render_table2a(t2_df, weight_col, suffix, t5) -> str:
         r"\toprule",
         r"\multicolumn{6}{@{}l}{\textit{Panel A: Market structure}} \\",
         r"\addlinespace[0.2em]",
-        r" & \multicolumn{2}{c}{\textit{B Firms (MCA-Level)}}"
-        r" & \multicolumn{2}{c}{\textit{D Firms (National)}} & \\",
+        r" & \multicolumn{2}{c}{\textit{$\mathrm{B}$ Firms (MCA-Level)}}"
+        r" & \multicolumn{2}{c}{\textit{$\mathrm{D}$ Firms (National)}} & \\",
         r"\cmidrule(lr){2-3} \cmidrule(lr){4-5}",
-        r"Year & No.\ B Firms & HHI (B) & No.\ D Firms & HHI (B+D) & MCA-Qtrs.\ ($N$) \\",
+        r"Year & No.\ $\mathrm{B}$ Firms & HHI ($\mathrm{B}$) & No.\ $\mathrm{D}$ Firms & HHI ($\mathrm{B}+\mathrm{D}$) & MCA-Qtrs.\ ($N$) \\",
         r" & (count) & ($0$--$10{,}000$) & (count) & ($0$--$10{,}000$) & \\",
         r"\midrule",
         *rows_a,
@@ -1805,14 +1805,14 @@ _VARS_MASTER_GROUPS = [
     ("Identifiers and panel structure", [
         (r"CodConglomeradoPrudencial", r"Conglomerate $j$ (prudential C-code)", "BCB", "All"),
         (r"CNPJ\_Lider, CNPJ", r"Lead-institution and root-level CNPJ of the conglomerate", "BCB", "All"),
-        (r"CODMUN\_IBGE", r"7-digit IBGE municipality code; \texttt{0} = nationally active D institution", "IBGE", "All"),
+        (r"CODMUN\_IBGE", r"7-digit IBGE municipality code; \texttt{0} = nationally active $\mathrm{D}$ firm", "IBGE", "All"),
         # The count is filled in by render_variables_master from the panel (count_mcas).
-        (r"mca\_code", r"Market $m$ --- one of __N_MCAS__ MCAs, or \texttt{NATIONAL} for D institutions", "Constructed", "All"),
+        (r"mca\_code", r"Market $m$ --- one of __N_MCAS__ MCAs, or \texttt{NATIONAL} for $\mathrm{D}$ firms", "Constructed", "All"),
         (r"year, quarter, AnoMes", r"Period $t$; \texttt{AnoMes} is the BCB IF-Data code YYYYMM", "BCB", "All"),
         (r"deposit\_type", r"Category $k$: 1 = demand, 2 = savings, 3 = interbank, 4 = time/CDB, 5 = prepaid", "BCB", "All"),
     ]),
     ("Outcomes: deposit stocks", [
-        (r"dep\_a1--dep\_a5, deposit\_balance", r"Type-$k$ deposit stock $\mathrm{Dep}_{jkmt}$; MCA level for B firms, national for D firms", "ESTBAN, IF-Data", "Sleep; Demand"),
+        (r"dep\_a1--dep\_a5, deposit\_balance", r"Type-$k$ deposit stock $\mathrm{Dep}_{jkmt}$; MCA level for $\mathrm{B}$ firms, national for $\mathrm{D}$ firms", "ESTBAN, IF-Data", "Sleep; Demand"),
         (r"lagged\_deposits", r"\texttt{deposit\_balance} shifted one quarter within institution $\times$ type", "Constructed", "Sleep"),
         (r"total\_deposits", r"Firm-quarter total of deposit types 1, 2, 4 and 5 (interbank deposits excluded), summed from the type columns; no lag", "Constructed", "Descriptive tables"),
         (r"pop\_total", r"Total MCA population $\mathrm{Pop}_{mt}$; scales the market size $M_{mt} = \hat{\bar{d}}_{mt}\cdot\mathrm{Pop}_{mt}$", "IBGE", "Demand (shares)"),
@@ -1909,7 +1909,7 @@ _INSTR_MASTER_GROUPS = [
         (r"indice\_basileia\_lag", r"Basel index --- total regulatory capital ratio (IF-Data line 79664), lagged 1Q", _STAGE_BOTH),
     ]),
     ("Rival mean spread", [
-        (r"rival\_mean\_spread", r"Mean spread of the other conglomerates present in the same market (MCA; for D firms, the other D firms nationally), same deposit type $\times$ quarter", _STAGE_SLEEP),
+        (r"rival\_mean\_spread", r"Mean spread of the other conglomerates present in the same market (MCA; for $\mathrm{D}$ firms, the other $\mathrm{D}$ firms nationally), same deposit type $\times$ quarter", _STAGE_SLEEP),
     ]),
     (r"BLP leave-one-out rival characteristics, group $g=(\text{MCA},\text{quarter})$", [
         (r"loo\_log\_assets, mean\_loo\_log\_assets", r"LOO sum and mean of rival $\ln(\text{Total Assets}_{t-1})$", _STAGE_DEMAND),
@@ -1920,7 +1920,7 @@ _INSTR_MASTER_GROUPS = [
         (r"n\_rivals", r"Number of non-null rivals in the group", _STAGE_DEMAND),
     ]),
     ("Branch competition (ESTBAN)", [
-        (r"estban\_rival\_branches\_lag", r"Log of one plus the count of rival bank branches in the MCA, lagged one calendar quarter; B firms only (0 on D rows); missing, and the row dropped from the demand sample, where ESTBAN has no record for the firm-MCA in the previous quarter", _STAGE_DEMAND),
+        (r"estban\_rival\_branches\_lag", r"Log of one plus the count of rival bank branches in the MCA, lagged one calendar quarter; $\mathrm{B}$ firms only (0 on $\mathrm{D}$ rows); missing, and the row dropped from the demand sample, where ESTBAN has no record for the firm-MCA in the previous quarter", _STAGE_DEMAND),
     ]),
 ]
 
@@ -1934,7 +1934,7 @@ def render_instruments_master() -> str:
         r"$g=(\text{MCA},\text{quarter})$: $\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
         r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$.",
         r"The rival mean spread is the mean spread of the other conglomerates present in the same "
-        r"market (MCA; national for D firms), deposit type and quarter; it is missing when the "
+        r"market (MCA; national for $\mathrm{D}$ firms), deposit type and quarter; it is missing when the "
         r"conglomerate has no rival in its market.",
     )
     rows = _grouped_rows(_INSTR_MASTER_GROUPS, n_cols=3)

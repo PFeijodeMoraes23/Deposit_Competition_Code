@@ -47,6 +47,7 @@ import pandas as pd
 
 from utils import paths as _paths
 from utils import state_transform as _st
+from utils import pix_state as _pix_state
 
 # Our status lines print Greek (Υ, φ, Δ); Windows consoles default to cp1252 and would
 # raise UnicodeEncodeError on them, so force UTF-8 output (no-op where already UTF-8).
@@ -181,9 +182,12 @@ def main():
     if src_key not in res:
         raise KeyError(f"Matched φ-spec {src_key!r} not in {pkl_path.name} keys: {list(res)}")
     ss = res[src_key]["second_stage"]
-    if ss is None or "interaction_pix_exists" not in ss.params:
-        raise KeyError(f"No interaction_pix_exists in second_stage of {src_key!r}")
-    upsilon = float(ss.params["interaction_pix_exists"])
+    # The Pix column the counterfactual moves (utils/pix_state.py): pix_exists by default, pix_use
+    # under SLEEP_PIX_STATE=use_cf, whose control function pix_use_cf is held at its value.
+    pix_col = _pix_state.main_col()
+    if ss is None or f"interaction_{pix_col}" not in ss.params:
+        raise KeyError(f"No interaction_{pix_col} in second_stage of {src_key!r}")
+    upsilon = float(ss.params[f"interaction_{pix_col}"])
 
     # ── exact link-aware no-Pix φ (nonlinear links only) ─────────────────────
     # For a nonlinear link G, φ = G(S′θ), so the level subtraction φ̂ − Υ_pix·pix
@@ -202,7 +206,8 @@ def main():
     # branch never builds a phi_nopix parquet, so cf4_pix.jl needs it to form the
     # scalar subtraction as Υ_pix·(pix − pix_level_zero) rather than Υ_pix·pix.
     _tf = _st.load_transform()
-    pix_level_zero = _tf.level_of("pix_exists", raw=0.0)
+    pix_level_zero = (_tf.level_of("pix_exists", raw=0.0) if pix_col == "pix_exists"
+                      else _pix_state.no_pix_level(pix_col))
     if link is not None and native is not None and link != "identity":
         import pyarrow.parquet as pq
         from utils.sleep_links import phi_from_native
@@ -230,7 +235,11 @@ def main():
         # transform and the observed levels are asserted against it.
         pix_lo = pix_level_zero
         dd0 = dd.copy()
-        if "pix_exists" in dd0.columns:
+        if pix_col != "pix_exists":
+            if pix_col not in dd0.columns:
+                raise KeyError(f"{dpath.name} has no {pix_col} column for the no-Pix counterfactual")
+            dd0[pix_col] = pix_lo
+        elif "pix_exists" in dd0.columns:
             _lv = _st.dummy_levels("pix_exists")
             _u = np.unique(dd0["pix_exists"].to_numpy(float))
             if _lv is not None and len(_u) == 2 and \
@@ -272,17 +281,17 @@ def main():
         # branch, for the same reason.
         import pyarrow.parquet as pq
         avail = set(pq.read_schema(dpath).names)
-        cols = [c for c in dict.fromkeys(["entity_id", "time_id", "phi_mt", "pix_exists"] + MERGE_KEYS)
+        cols = [c for c in dict.fromkeys(["entity_id", "time_id", "phi_mt", pix_col] + MERGE_KEYS)
                 if c in avail]
-        gap = [c for c in ("entity_id", "time_id", "phi_mt", "pix_exists") if c not in avail]
+        gap = [c for c in ("entity_id", "time_id", "phi_mt", pix_col) if c not in avail]
         if gap:
             raise KeyError(f"demand parquet {dpath.name} lacks columns needed for the identity-link "
                            f"no-Pix φ: {gap}")
         dd = pd.read_parquet(dpath, columns=cols)
         pm = dd["phi_mt"].to_numpy(float)
-        pix = dd["pix_exists"].to_numpy(float)
+        pix = dd[pix_col].to_numpy(float)
 
-        _lv = _st.dummy_levels("pix_exists")
+        _lv = _st.dummy_levels("pix_exists") if pix_col == "pix_exists" else None
         _u = np.unique(pix)
         if _lv is not None and len(_u) == 2 and \
                 max(abs(_u[0] - _lv[0]), abs(_u[1] - _lv[1])) > 1e-8:
@@ -317,7 +326,7 @@ def main():
                estim=e, spec=s, link=(link or "identity"), exact_nopix=phi_nopix_name is not None,
                phi_nopix_parquet=phi_nopix_name,
                state_transform_version=_st.STATE_TRANSFORM_VERSION,
-               pix_level_zero=pix_level_zero,
+               pix_level_zero=pix_level_zero, pix_col=pix_col,
                note=("exact link-aware no-Pix φ exported (phi_from_native, Pix set to "
                      "pix_level_zero); upsilon_pix is the Pix AME, reporting-only"
                      if phi_nopix_name

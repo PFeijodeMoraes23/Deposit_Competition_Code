@@ -462,6 +462,18 @@ def _pix_shifted_range(X, vs, theta, phi_params, vsd):
         z = vs + th * (lo[j] - sub[:, j]) / vsd
         lo_v = min(lo_v, float(z.min()))
         hi_v = max(hi_v, float(z.max()))
+    # A continuous Pix state (utils/pix_state.py, SLEEP_PIX_STATE=use_cf) is moved to its no-Pix
+    # level (zero use) the same way, so eq.(18)'s index lies inside the knots too. Its control
+    # function is not moved: the counterfactual holds it at its value. None under the default.
+    from utils import pix_state as _pix_state
+    for nm0 in _pix_state.continuous_main_cols():
+        nm = f"interaction_{nm0}"
+        if nm not in phi_params:
+            continue
+        jj = phi_params.index(nm)
+        z = vs + float(theta[jj]) * (_pix_state.no_pix_level(nm0) - X[:, jj]) / vsd
+        lo_v = min(lo_v, float(z.min()))
+        hi_v = max(hi_v, float(z.max()))
     return lo_v, hi_v
 
 
@@ -1562,6 +1574,11 @@ def _load_band_sidecar(est):
         import pickle
         from utils import paths as _p
         fp = _p.demand_prep_root() / "Rout" / f"wcb_band_est{est}.pkl"
+        # The sidecar with the first stage of Pix use propagated (sleep_pix_genreg.py --combine,
+        # SLEEP_PIX_STATE=use_cf) replaces the plain one when it is on disk.
+        _fg = fp.with_name(f"wcb_band_est{est}_gen.pkl")
+        if _fg.exists():
+            fp = _fg
         if fp.exists():
             with open(fp, "rb") as fh:
                 out = pickle.load(fh)

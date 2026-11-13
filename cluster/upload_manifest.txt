@@ -134,6 +134,11 @@ gdp_real_growth   | data | sleep      | PANEL_INTERMED| mca_gdp_real_growth.csv 
 # BRANCH_SIDECAR); cl_bootstrap_tree links it into processed/PANEL_INTERMED. Unstaged, the
 # screen is skipped silently and the cluster D6 moment is built on a larger event set.
 estban_branches    | data | sleep      | PANEL_INTERMED| estban_own_branches.csv        | data/input | python panel_estban_instrument.py                             | -         | -
+# The Pix state of the sleepiness index under SLEEP_PIX_STATE=use_cf (utils/pix_state.py: Pix use and
+# its first stage on the 2019 exposures); cl_bootstrap_tree links both into processed/PANEL_INTERMED.
+# Not read under the default (national), so a run without them is unaffected.
+pix_exposures     | data | sleep      | PANEL_INTERMED| pix_exposures_2019_mca.csv     | data/input | python make_pix_state_inputs.py                               | -         | -
+pix_use           | data | sleep      | PANEL_INTERMED| pix_use_mca_quarter.csv        | data/input | python make_pix_state_inputs.py                               | -         | -
 banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_bcb_banked.py                                  | -         | -
 # The persisted state transform. STATE_CENTERING_JSON points every cluster job at the uploaded
 # copy, so theta0 keeps meaning "phi-hat at the average market".

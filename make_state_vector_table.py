@@ -2,8 +2,8 @@ r"""make_state_vector_table.py -- the appendix table that documents the sleepine
 
 Author: Pedro Feijó de Moraes
 
-Renders tab_state_vector_map.tex (label tab:state_vector_map), one non-breaking table in two
-panels:
+Renders tab_state_vector_map.tex (label tab:state_vector_map), one table float, `table[htpb]`, in
+two panels:
 
   Panel A  every state of the specification (12) block: the depositor trait it measures, the
            share of its variance the entity and quarter fixed effects absorb, and its law of
@@ -15,7 +15,9 @@ panels:
 
 Every number comes from ESTIMATION_OUTPUT/DIAG_STATE_SELECTION, written by
 diagnostics/diag_state_vector_selection.py from the regressors alone. The unrounded values go to
-the sidecar tab_state_vector_map.json, which make_paper_numbers.py reads.
+the sidecar tab_state_vector_map.json, which make_paper_numbers.py reads. The sidecar also keeps
+the absorbed share of the 4G/5G share, a collected candidate the table does not print, so that the
+prose can state why it is left out; its field `not_in_table` lists such states.
 
     python make_state_vector_table.py
 """
@@ -29,7 +31,6 @@ ensure_project_venv(__file__)
 
 import pandas as pd
 
-from make_bbl_cost_tables import _wrap
 from utils import paths as _paths
 
 try:
@@ -56,6 +57,12 @@ IN_ROWS = [
      PROD_BLOCK, "AR(1) within market"),
     ("connections_per100", "Mobile Lines", "Composition: digital access",
      PROD_BLOCK, "AR(1) within market"),
+]
+
+# Collected candidates the table does not print, whose absorbed share the sidecar keeps for the
+# prose. (state, block whose design row carries the state)
+SIDECAR_ONLY = [
+    ("frac_4g5g", "S5+frac_4g5g"),
 ]
 
 # Panel B. (block, row label, what it adds).
@@ -107,15 +114,42 @@ def absorbed(per_var: pd.DataFrame, block: str, state: str) -> float:
     return float(r["absorbed_alone"].iloc[0])
 
 
+def _float_table(body, col_fmt, caption, label, header, footnote, ncols) -> str:
+    r"""One \input-ready table as a `table[htpb]` float: the caption and label above a full-width
+    tabularx, the notes as its last row. The table fits on one page, so it floats whole; the
+    spacing, font size and column padding are set inside the float and do not leak out of it."""
+    return "\n".join([
+        r"\begin{table}[htpb]",
+        r"\setstretch{1.0}",
+        r"\centering",
+        r"\footnotesize",
+        r"\setlength{\tabcolsep}{3pt}",
+        rf"\caption{{{caption}}}\label{{{label}}}",
+        rf"\begin{{tabularx}}{{\textwidth}}{{{col_fmt}}}",
+        r"\toprule",
+        header + r" \\",
+        r"\midrule",
+        *body,
+        r"\bottomrule",
+        rf"\multicolumn{{{ncols}}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}"
+        rf"{{\footnotesize {footnote}}} \\",
+        r"\end{tabularx}",
+        r"\end{table}",
+        "",
+    ])
+
+
 def render(design, per_var) -> tuple[str, dict]:
-    side = {"absorbed_alone": {}, "design": {}}
+    side = {"absorbed_alone": {}, "not_in_table": [], "design": {}}
     body = [r"\multicolumn{5}{@{}l}{\textit{Panel A. States of the sleepiness function}} \\*",
-            r"\addlinespace[0.2em]",
-            r"\multicolumn{5}{@{}l}{In the state vector} \\*"]
+            r"\addlinespace[0.2em]"]
     for state, lab, trait, blk, motion in IN_ROWS:
         a = absorbed(per_var, blk, state)
         side["absorbed_alone"][state] = a
         body.append(f"{lab} & {trait} & {_abs(f3(a))} & {_motion(motion)} \\\\")
+    for state, blk in SIDECAR_ONLY:
+        side["absorbed_alone"][state] = absorbed(per_var, blk, state)
+        side["not_in_table"].append(state)
     body += [r"\midrule",
              r"\multicolumn{5}{@{}l}{\textit{Panel B. Conditioning of the regressors of the second "
              r"stage of the sleepiness estimation}} \\*",
@@ -144,12 +178,12 @@ def render(design, per_var) -> tuple[str, dict]:
     )
     head = (r"\textbf{Variable} & \textbf{Depositor trait} & "
             + _abs(r"\textbf{Absorbed by FE}") + " & "
-            + _motion(r"\textbf{Law of motion, or reason left out}"))
+            + _motion(r"\textbf{Law of motion}"))
     col_fmt = (r">{\raggedright\arraybackslash}p{3.4cm} >{\raggedright\arraybackslash}X "
                r">{\raggedright\arraybackslash}p{3.1cm} >{\centering\arraybackslash}p{1.8cm} "
                r">{\raggedright\arraybackslash}p{3.5cm}")
-    tex = _wrap(body, col_fmt, "State Vector of the Sleepiness Function", LABEL, head, note,
-                ncols=5, nobreak=True)
+    tex = _float_table(body, col_fmt, "State Vector of the Sleepiness Function", LABEL, head,
+                       note, ncols=5)
     return tex, side
 
 

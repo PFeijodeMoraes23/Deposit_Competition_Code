@@ -23,11 +23,13 @@ import pandas as pd
 from utils import paths as _paths
 
 SPEC = 12
+from utils import pix_state as _pix_state  # noqa: E402  (the Pix column of the state vector)
+
 ROUTINES = (3, 4)
 CACHE = _paths.rout_dir() / "sleep_cells_cache"
 # The five states of S_mt under their short names.
 STATES = {"cadunico": "cadunico_families_per1000", "age65": "fraction_65plus",
-          "selic": "risk_free_qoq_lag", "mobile": "connections_per100", "pix": "pix_exists"}
+          "selic": "risk_free_qoq_lag", "mobile": "connections_per100", "pix": _pix_state.main_col()}
 
 
 def pre_cut(est: int, refresh: bool) -> tuple[pd.DataFrame, dict, dict]:

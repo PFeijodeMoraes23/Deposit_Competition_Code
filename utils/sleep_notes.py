@@ -30,7 +30,7 @@ def _unit_obs(pooled: bool) -> str:
     D-firm rows are national cells rather than MCAs, so whenever the sample pools D firms in
     with B firms the clause carries that qualifier; a B-only sample has no D-firm row to
     qualify, so it keeps the plain phrase."""
-    return (r"conglomerate $\times$ deposit type $\times$ MCA (national for D firms) "
+    return (r"conglomerate $\times$ deposit type $\times$ MCA (national for $\mathrm{D}$ firms) "
             r"$\times$ quarter" if pooled else UNIT_OBS)
 
 

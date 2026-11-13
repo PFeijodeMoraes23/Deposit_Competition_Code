@@ -39,6 +39,7 @@ from utils import state_transform as _st
 from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 from utils import calendar_lags  # lags by calendar quarter (a missing quarter gives no lag)
 from utils import demand_chars   # corrected characteristics, segments and balances (always applied)
+from utils import pix_state as _pix_state  # the Pix state of the sleepiness index (SLEEP_PIX_STATE)
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
@@ -108,6 +109,14 @@ ACCESS_LO       = float(os.environ.get('DEMAND_ACCESS_LO', 0.35))
 ACCESS_HI       = float(os.environ.get('DEMAND_ACCESS_HI', 2.5))
 FINDEX_FALLBACK = float(os.environ.get('DEMAND_FINDEX_FALLBACK', 0.77))
 TOTAL_SHARE_CAP = float(os.environ.get('DEMAND_TOTAL_SHARE_CAP', 0.95))
+# PHI_SOURCE  where specification 12's phi_mt comes from. 'spec' (default): rebuilt from the stored
+#          sleepiness fit, as for every specification. 'attention': W2's attention fit
+#          (sleep_attention_stakes.py --fit), read by (mca_code, time_id) from
+#          <DEMAND_ATTN_PHI_DIR>/est{k}/attention_phi_mt.csv after its copy of the baseline phi is
+#          checked against the one rebuilt here. Specification 12 only; run each branch into its own
+#          DEMAND_PREP_DIR so the two sets of parquets never share a folder.
+PHI_SOURCE      = os.environ.get('DEMAND_PHI_SOURCE', 'spec').strip().lower() or 'spec'
+ATTN_PHI_DIR    = os.environ.get('DEMAND_ATTN_PHI_DIR', '').strip()
 
 # MIN_YEAR / MAX_YEAR  the estimation window [2016, 2024], defined once in utils/window.py — see that
 #          module for the full rationale on both bounds (and the DEMAND_MIN_YEAR / DEMAND_MAX_YEAR env
@@ -230,6 +239,8 @@ def build_base_panel(panel_csv, time_block=False):
     if 'year' in df.columns:
         df['post_2020'] = (df['year'] >= 2020).astype(int)
         df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
+        # The Pix state of the sleepiness index (utils/pix_state.py); nothing under the default.
+        df = _pix_state.add_columns(df, where="sleep_demand_prep_link")
     # The D-type dummy is the complement of the stored verdict, never an independent test.
     if 'is_B' in df.columns:
         df['dummy_D_type'] = (~df['is_B'].astype(bool)).astype(float)
@@ -317,6 +328,18 @@ def _apply_link(index_series, link, res_ss):
     else:
         raise ValueError(f"unknown link {link!r}")
     return pd.Series(phi, index=index_series.index).clip(lower=0.0, upper=1.0)
+
+
+def _attention_phi(est_num):
+    """W2's attention phi of routine est_num by (mca_code, time_id), with its copy of the baseline phi
+    (the stored specification-12 fit), from sleep_attention_stakes.py --fit."""
+    d = Path(ATTN_PHI_DIR) if ATTN_PHI_DIR else paths.rout_dir() / "attention_stakes"
+    f = d / f"est{est_num}" / "attention_phi_mt.csv"
+    if not f.exists():
+        raise FileNotFoundError(f"DEMAND_PHI_SOURCE=attention, but {f} does not exist "
+                                f"(sleep_attention_stakes.py --fit --est {est_num} writes it)")
+    return pd.read_csv(f, dtype={'mca_code': str},
+                       usecols=['mca_code', 'time_id', 'phi_attn', 'phi_baseline'])
 
 
 
@@ -488,7 +511,7 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     return df_spec
 
 
-def process_specification(spec_name, spec_res, df_base, link, pre_cut=False):
+def process_specification(spec_name, spec_res, df_base, link, pre_cut=False, est_num=None):
     """The demand frame of one specification. pre_cut=True returns, instead, every cell before
     the (14-B) floor and cut, with the native index (`phi_index`) and the active balance before
     the floor (`active_raw`), for diagnostics; the prep itself never sets it."""
@@ -526,6 +549,27 @@ def process_specification(spec_name, spec_res, df_base, link, pre_cut=False):
     index_native = df_spec['phi_mt'].copy()
     # NATIVE index -> phi via the estimator's link (AMEs are NOT used here).
     df_spec['phi_mt'] = _apply_link(df_spec['phi_mt'], link, res_ss)
+    if PHI_SOURCE == 'attention':
+        # The attention branch: the same rows, phi_mt from W2's attention fit. On the B rows its copy of
+        # the baseline phi must equal the phi just rebuilt from the stored fit, which proves that the keys
+        # and the two frames agree before anything is replaced. A B row whose state this frame fills
+        # differently from the estimation frame (a median fill) may differ, up to 0.1% of B rows. D rows
+        # are not compared: their states are refilled by the estimation frame, and only phi_t reaches them.
+        att = _attention_phi(est_num)
+        m = df_spec[['mca_code', 'time_id']].merge(att, on=['mca_code', 'time_id'], how='left')
+        if m['phi_attn'].isna().any():
+            raise ValueError(f"attention phi: {int(m['phi_attn'].isna().sum()):,} rows of {spec_name} "
+                             f"have no (mca_code, time_id) in the attention file")
+        _b = df_spec['is_B'].to_numpy(bool)
+        _d = np.abs(df_spec['phi_mt'].to_numpy(float) - m['phi_baseline'].to_numpy(float))[_b]
+        gap = float(_d.max()) if _d.size else 0.0
+        share = float((_d > 1e-9).mean()) if _d.size else 0.0
+        if share > 0.001:
+            raise ValueError(f"attention phi: on {share:.2%} of B rows the baseline phi rebuilt here differs "
+                             f"from the attention file's copy (max {gap:.3e}); the frames or the fits disagree")
+        df_spec['phi_mt'] = m['phi_attn'].to_numpy(float)
+        print(f"  [phi source] attention: specification 12 phi_mt from {ATTN_PHI_DIR or 'Rout/attention_stakes'} "
+              f"(baseline: {share:.4%} of B rows differ, max {gap:.1e})")
 
     # The national φ_t is the population-weighted average of φ_mt over the quarter's B markets (the
     # paper's φ_t = Σ_m M_mt φ_mt / M_t with M_mt ∝ Pop_mt). A D row's mca_code is NATIONAL and its
@@ -616,6 +660,10 @@ def run(est_num, link, tag, time_block=False, spec="all"):
     time_block=True (E4) adds the time block (time_trend + gdp_growth_yoy)
     to the demand frame so phi reconstructs the time interactions."""
     spec = str(spec)
+    if PHI_SOURCE not in ('spec', 'attention'):
+        raise SystemExit(f"DEMAND_PHI_SOURCE={PHI_SOURCE!r}: expected 'spec' or 'attention'")
+    if PHI_SOURCE == 'attention' and spec.strip() != '12':
+        raise SystemExit("DEMAND_PHI_SOURCE=attention serves specification 12 only (--spec 12)")
     if spec.lower() == 'all':
         spec_ids = list(range(1, 13))
     elif '-' in spec:
@@ -651,7 +699,8 @@ def run(est_num, link, tag, time_block=False, spec="all"):
         key = next((k for k in results_dict if target_name in k), None)
         if not key:
             continue
-        df_spec, summary, _ = process_specification(key, results_dict[key], df_base, link)
+        df_spec, summary, _ = process_specification(key, results_dict[key], df_base, link,
+                                                    est_num=est_num)
         if df_spec is not None:
             out = demand_output_dir / f"demand_{est_num}_{tag}_spec_{sid}.parquet"
             df_spec = demand_chars.finalize(df_spec, out, summary)

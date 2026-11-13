@@ -72,6 +72,14 @@ Nothing in the pipeline is edited and nothing here is a paper number.
       panel uses (each municipality's latest MCA); an MCA whose municipalities lie in two states
       takes the state of most of them (ties: the lower code), and a market whose MCA is not in
       the crosswalk is its own cluster. Both counts are written under p3.state_clusters.
+      The same draws also give the permutation of the slopes (the real slope of log sd on log
+      sd~, alone and net of the structure, against the draws' slopes: n_ge_slope draws at or
+      above it, p_perm_slope = (1 + n_ge_slope) / (1 + N_SHUFFLES)) and the recentred instrument
+      of Borusyak and Hull (2023), p3.recentred: mu_mt, the mean of the draws' log sd~, is the
+      instrument's expectation under the permutation; the first stage of log sd on (log sd~ - mu)
+      by MCA and by state, and its randomization distribution, the slopes on (log sd~_r - mu) over
+      the draws (se_ri their standard deviation, t_ri, f_ri = t_ri squared, and p_ri the share of
+      draws with an absolute slope at or above the real one, as (1 + count) / (1 + N_SHUFFLES)).
       Measured-rate variant (D1's missing-and-drop robustness), when the panel has
       rate_a4_carried: S_measured_mt = sd_w over the banks whose type-4 rate is measured that
       quarter (rate_a4_carried = 0) x bal_mt; its instrument S~_measured_mt takes rho~ from the
@@ -625,11 +633,14 @@ def p3(df, got):
     row = t["cq_row"].fillna(0).to_numpy(dtype=int)
     base = ((out["sd_spread"] > 0) & (out["S"] > 0) & (out["S_tilde"] > 0)).to_numpy()
     draws = []
+    zdraw = np.full((N_SHUFFLES, len(out)), np.nan)   # each draw's log sd~ (the recentring below)
     for k in range(N_SHUFFLES):
         perm = cqv.groupby("qi", group_keys=False)["rho_fit"].apply(shuffle).reindex(cqv.index).to_numpy()
         tp = t[["m", "qi", "dep4_lag"]].assign(rho_perm=np.where(has, perm[row], np.nan))
         sdp = wsd_by(tp.dropna(subset=["rho_perm"]), ["m", "qi"], "rho_perm", "dep4_lag")["sd"]
         sdp = sdp.reindex(mq).to_numpy()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            zdraw[k] = np.where(sdp > 0, np.log(sdp), np.nan)
         keep = base & (sdp > 0)
         d = out[keep]
         y, z = np.log(d["sd_spread"].to_numpy()), np.log(sdp[keep])
@@ -641,6 +652,8 @@ def p3(df, got):
     f_real, f_net_real = diag["sd_only_log"]["f"], diag["sd_only_log_ctrl_structure"]["f"]
     sp, sn = np.array([x["f_state"] for x in draws]), np.array([x["f_net_state"] for x in draws])
     s_real, s_net_real = diag["sd_only_log"]["f_state"], diag["sd_only_log_ctrl_structure"]["f_state"]
+    bp, bpn = np.array([x["slope"] for x in draws]), np.array([x["slope_net"] for x in draws])
+    b_real, b_net_real = diag["sd_only_log"]["slope"], diag["sd_only_log_ctrl_structure"]["slope"]
     qs = lambda v: {str(p): float(np.quantile(v, p)) for p in (0.0, 0.1, 0.5, 0.9, 1.0)}
     placebo = dict(n_shuffles=N_SHUFFLES, seed=SEED, f_real=f_real, f_net_real=f_net_real,
                    f_median=float(np.median(fp)), f_net_median=float(np.median(fn)),
@@ -658,7 +671,40 @@ def p3(df, got):
                    share_ge_net_state=float((sn >= s_net_real).mean()),
                    p_perm_state=float((1 + (sp >= s_real).sum()) / (1 + N_SHUFFLES)),
                    p_perm_net_state=float((1 + (sn >= s_net_real).sum()) / (1 + N_SHUFFLES)),
-                   f_state_quantiles=qs(sp), f_net_state_quantiles=qs(sn), draws=draws)
+                   f_state_quantiles=qs(sp), f_net_state_quantiles=qs(sn),
+                   # The real slope against the draws' slopes: n_ge_slope draws at or above it.
+                   slope_real=b_real, slope_net_real=b_net_real,
+                   slope_median=float(np.median(bp)), slope_net_median=float(np.median(bpn)),
+                   slope_max=float(bp.max()), slope_net_max=float(bpn.max()),
+                   n_ge_slope=int((bp >= b_real).sum()), n_ge_slope_net=int((bpn >= b_net_real).sum()),
+                   p_perm_slope=float((1 + (bp >= b_real).sum()) / (1 + N_SHUFFLES)),
+                   p_perm_slope_net=float((1 + (bpn >= b_net_real).sum()) / (1 + N_SHUFFLES)),
+                   draws=draws)
+    # The recentred instrument (Borusyak and Hull, 2023). mu_mt, the mean of the draws' log sd~, is
+    # the instrument's expectation under the permutation; log sd on (log sd~ - mu), MCA and quarter
+    # effects, by MCA and by state, alone and net of the structure, on the real fit's market-
+    # quarters where every draw's dispersion is positive. Its randomization distribution is the
+    # same regression on (log sd~_r - mu) for each draw r: se_ri the standard deviation of those
+    # slopes, t_ri = slope / se_ri, f_ri = t_ri squared, n_abs_ge the draws with |slope_r| at or
+    # above |slope|, p_ri = (1 + n_abs_ge) / (1 + N_SHUFFLES).
+    real = ((out["sd_spread"] > 0) & (out["sd_rho_fit"] > 0) & (out["S"] > 0) & (out["S_tilde"] > 0)).to_numpy()
+    full = real & np.isfinite(zdraw).all(axis=0)
+    mu = zdraw[:, full].mean(axis=0)
+    d = out[full]
+    y, z = np.log(d["sd_spread"].to_numpy()), np.log(d["sd_rho_fit"].to_numpy())
+    recentred = dict(n=int(full.sum()), n_real=int(real.sum()), corr_z_mu=float(np.corrcoef(z, mu)[0, 1]))
+    for lab, ctrl in (("alone", False), ("net", True)):
+        r = first_stage(d, y, z - mu, ctrl)
+        sl = np.array([first_stage(d, y, zdraw[k, full] - mu, ctrl)["slope"] for k in range(N_SHUFFLES)])
+        se_ri = float(sl.std(ddof=1))
+        n_abs = int((np.abs(sl) >= abs(r["slope"])).sum())
+        recentred[lab] = dict(slope=r["slope"], se=r["se"], f=r["f"], se_state=r["se_state"],
+                              f_state=r["f_state"], n_state_clusters=r["n_state_clusters"],
+                              se_ri=se_ri, t_ri=r["slope"] / se_ri, f_ri=(r["slope"] / se_ri) ** 2,
+                              n_abs_ge=n_abs, p_ri=float((1 + n_abs) / (1 + N_SHUFFLES)),
+                              draw_slope_median=float(np.median(sl)),
+                              draw_slope_quantiles={str(p): float(np.quantile(sl, p)) for p in (0.05, 0.5, 0.95)},
+                              draw_slopes=[float(x) for x in sl])
     fsr = out[(out["sd_spread"] > 0) & (out["sd_rho_fit"] > 0) & (out["S"] > 0) & (out["S_tilde"] > 0)]
     state_clusters = dict(
         crosswalk=XWALK.name, n_states=int(st_map.nunique()), mca_multi_state=multi_state,
@@ -685,7 +731,7 @@ def p3(df, got):
                  mq_with_fallback_weight=int((ok["fallback_weight_share"] > 0).sum()),
                  rho_fit_weight_share_mean=float(out["rho_fit_weight_share"].mean()),
                  by_year=by_year, cost_fit=fitstats, S_on_S_tilde=diag, placebo=placebo,
-                 state_clusters=state_clusters)
+                 state_clusters=state_clusters, recentred=recentred)
     stamp(f"P3: {stats['n_mq_S']:,} of {stats['n_mq']:,} market-quarters with S; median S "
           f"R$ {stats['S_quantiles']['0.5']:.1f}/yr; cost fit joint F {fitstats['joint_f']:.2f}; "
           f"S on S~ F {diag['level']['f']:.2f} (level), {diag['log']['f']:.2f} (log), "
@@ -700,6 +746,14 @@ def p3(df, got):
           f"F {s_real:.2f}, net {s_net_real:.2f}; placebo median {placebo['f_state_median']:.2f} "
           f"({placebo['n_ge_state']} at or above), net {placebo['f_net_state_median']:.2f} "
           f"({placebo['n_ge_net_state']} at or above)")
+    ra, rn = recentred["alone"], recentred["net"]
+    stamp(f"P3 slopes: real {b_real:.4f} against the draws' median {placebo['slope_median']:.4f}, max "
+          f"{placebo['slope_max']:.4f} (p {placebo['p_perm_slope']:.2f}); net {b_net_real:.4f}, median "
+          f"{placebo['slope_net_median']:.4f}, max {placebo['slope_net_max']:.4f} (p "
+          f"{placebo['p_perm_slope_net']:.2f}). Recentred ({recentred['n']:,} market-quarters, corr(z, mu) "
+          f"{recentred['corr_z_mu']:.3f}): slope {ra['slope']:.4f}, se_ri {ra['se_ri']:.4f}, t_ri "
+          f"{ra['t_ri']:.2f}, p_ri {ra['p_ri']:.2f}, F {ra['f']:.2f} (MCA) {ra['f_state']:.2f} (state); net "
+          f"{rn['slope']:.4f}, t_ri {rn['t_ri']:.2f}, p_ri {rn['p_ri']:.2f}, F {rn['f']:.2f} / {rn['f_state']:.2f}")
     if not meas:
         stats["measured"] = "panel has no rate_a4_carried: variant not built"
         stamp("P3: no rate_a4_carried in this panel; the measured-rate columns are empty")

@@ -66,6 +66,8 @@ _BASE_LABELS = {
     # which is why it exceeds 100 in the median market. Full label in _FULL_LABELS below.
     'connections_per100': 'Mobile Lines',
     'pix_exists': 'Pix Available',
+    'pix_use': 'Pix Use',
+    'pix_use_cf': 'Pix Use, Control Function',
     'const': 'Constant', 'constant': 'Constant',
     'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
     'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
@@ -342,7 +344,7 @@ def build_second_stage_table(results_dict, est_num):
         entry = results_dict.get(f"{ek} x {p}")
         return entry.get('second_stage') if isinstance(entry, dict) else None
 
-    all_vars = ['constant', 'pix_exists', 'risk_free_qoq_lag', 'gdp_per_capita',
+    all_vars = ['constant', 'pix_exists', 'pix_use', 'pix_use_cf', 'risk_free_qoq_lag', 'gdp_per_capita',
                 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
                 'connections_per100', 'time_trend', 'gdp_growth_yoy', 'v_hat_x_lagged_dep']
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows

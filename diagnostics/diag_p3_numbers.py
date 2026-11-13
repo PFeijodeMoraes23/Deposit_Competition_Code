@@ -23,6 +23,14 @@ block of an earlier copy too (how the d01b8bae and 45dbfc58 entries were seeded)
                   draws; placebo_share_ge_state, placebo_share_ge_net_state: the share of draws
                   with state-cluster F at or above f_state, f_net_state. Only in entries whose p3
                   block has them
+                perm_slope, perm_slope_median, perm_slope_max, perm_n_ge, perm_p (and _net): the
+                  slope of log sd on log sd~ against the same draws' slopes: their median and
+                  maximum, the draws at or above it, p = (1 + perm_n_ge) / (1 + draws)
+                rc_*: the recentred instrument (log sd~ minus the mean of the draws' log sd~,
+                  Borusyak and Hull 2023), alone and _net: rc_slope, rc_f and rc_f_state (MCA and
+                  state clusters), rc_se_ri (standard deviation of the slopes on the recentred
+                  draws), rc_t_ri, rc_f_ri, rc_n_abs_ge, rc_p_ri; rc_corr_z_mu, rc_n. Only in
+                  entries whose p3 block has them
                 f_level, f_log: S on S~ in levels and logs; n_first_stage
                 n_mq, n_mq_S, sd_spread_pp_median, cost_fit_joint_f
                 median_S_measured, f_measured, f_net_measured, carried_weight_share_mean: the
@@ -60,7 +68,12 @@ DOC = ("P3 first-stage numbers by panel (8-character md5, as p3_stakes_mca_quart
        "placebo. State clusters (the MCA's state, IBGE crosswalk), where present: f_state, "
        "f_net_state; f_placebo_state and f_net_placebo_state = median state-cluster F of the same "
        "draws; placebo_share_ge_state and placebo_share_ge_net_state = share of draws with "
-       "state-cluster F at or above f_state and f_net_state.")
+       "state-cluster F at or above f_state and f_net_state. Where present: perm_* = the slope of "
+       "log sd on log sd~ (and _net) against the same draws' slopes, perm_p = (1 + perm_n_ge) / "
+       "(1 + draws); rc_* = the recentred instrument (log sd~ minus the mean of the draws' log sd~, "
+       "Borusyak and Hull 2023): rc_slope, rc_f (MCA clusters), rc_f_state, and its randomization "
+       "distribution over the draws: rc_se_ri, rc_t_ri, rc_f_ri = rc_t_ri squared, rc_p_ri = "
+       "(1 + draws with an absolute slope at or above |rc_slope|) / (1 + draws); rc_corr_z_mu.")
 
 
 def entry(p3: dict) -> dict:
@@ -82,6 +95,18 @@ def entry(p3: dict) -> dict:
             e.update(f_placebo_state=pl["f_state_median"], f_net_placebo_state=pl["f_net_state_median"],
                      placebo_share_ge_state=pl["share_ge_state"],
                      placebo_share_ge_net_state=pl["share_ge_net_state"])
+    if pl and "slope_real" in pl:   # the permutation of the slopes, where the p3 block has it
+        for x in ("", "_net"):
+            e.update({f"perm_slope{x}": pl[f"slope{x}_real"], f"perm_slope{x}_median": pl[f"slope{x}_median"],
+                      f"perm_slope{x}_max": pl[f"slope{x}_max"], f"perm_n_ge{x}": pl[f"n_ge_slope{x}"],
+                      f"perm_p{x}": pl[f"p_perm_slope{x}"]})
+    rc = p3.get("recentred")
+    if isinstance(rc, dict):        # the recentred instrument, where the p3 block has it
+        e.update(rc_n=rc["n"], rc_corr_z_mu=rc["corr_z_mu"])
+        for x, r in (("", rc["alone"]), ("_net", rc["net"])):
+            e.update({f"rc_slope{x}": r["slope"], f"rc_f{x}": r["f"], f"rc_f{x}_state": r["f_state"],
+                      f"rc_se_ri{x}": r["se_ri"], f"rc_t_ri{x}": r["t_ri"], f"rc_f_ri{x}": r["f_ri"],
+                      f"rc_n_abs_ge{x}": r["n_abs_ge"], f"rc_p_ri{x}": r["p_ri"]})
     e.update(f_level=d["level"]["f"], f_log=d["log"]["f"], n_first_stage=d["sd_only_log"]["n"],
              n_mq=p3["n_mq"], n_mq_S=p3["n_mq_S"],
              sd_spread_pp_median=p3["sd_spread_pp_quantiles"]["0.5"],
@@ -114,6 +139,10 @@ def main():
         st = (f"; state clusters: F {e['f_state']:.2f}, placebo median {e['f_placebo_state']:.2f} "
               f"(share at or above {e['placebo_share_ge_state']:.3f}), net {e['f_net_state']:.2f}"
               if "f_placebo_state" in e else "")
+        st += (f"; slope {e['perm_slope']:.4f} (p {e['perm_p']:.2f} against the draws' slopes)"
+               if "perm_slope" in e else "")
+        st += (f"; recentred: slope {e['rc_slope']:.4f}, t_ri {e['rc_t_ri']:.2f}, p_ri {e['rc_p_ri']:.2f}, "
+               f"F {e['rc_f']:.2f} (MCA) {e['rc_f_state']:.2f} (state)" if "rc_slope" in e else "")
         print(f"{e['panel_md5'][:8]}: median S {e['median_S']:.1f}, F {e['f']:.2f}, {pl}{st}  ({src})")
     cur = entry(json.loads(SRC.read_text(encoding="utf-8"))["p3"])
     s = pd.read_csv(STAKES, usecols=["S", "panel_md5"])

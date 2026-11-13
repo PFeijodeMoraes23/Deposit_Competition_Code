@@ -44,6 +44,32 @@
 23. **The first stage of the stakes is clustered by state (22:09).** The paper quotes the state-clustered statistics. The keys are a go.
 24. **Instrumented Pix use replaces the launch indicator in the availability index (22:09).** See A2.
 25. **The state-vector table loses the block "Collected, not in the state vector" of Panel A (22:16).** Panel B stays. The change to `make_state_vector_table.py` is a go, with the diff outline posted first.
+26. **Credit unions are in the outside good (11-13 10:27).** The factors are computed on the comparable institutions.
+27. **The panel is brought to the public's universe by a uniform factor by deposit type and quarter (11-13 10:27)**, on stocks, with (11-B) recomputed. The registry's factor by segment is a sensitivity. This closes A1.22.
+28. **The national pool is allocated to markets by population times access (L1) as the base, with the mean rule (L3) beside it (11-13 10:27).** Pedro confirmed L1 at 10:49 knowing that 13 percent of the stock sits in market-quarters above 0.80 of the pool (L3: 6 percent). Step 2 still reports both.
+29. **Booking moves inside a bank are netted symmetrically (11-13 10:27).** This closes A1.19.
+30. **Step 2 is a go (11-13 10:27)**, under 26 to 29, at both caps, with L1 and L3.
+31. **The fee plan's seven decisions are accepted as IMPR recommends (11-13 10:27).** Fees above R\$ 50 are set to missing. This replaces the cap of 11-12.
+32. **(a) is dropped as a benchmark. The two row-based channels in the prep are fixed in the rerun (11-13 10:27).**
+33. **The state-vector table's two leftovers are fixed (11-13 10:27):** the column header and the lone subheading. The key of the 4G/5G share comes back (Pedro to IMPR, 11-12 23:50).
+34. **The stakes use the recentred instrument with weak-instrument-robust inference (11-13 10:27).** Keys for the recentred numbers are a go.
+35. **LAI 18810.025440/2026-48 is answered in part and is not appealed (11-13 11:02).** Archive it and run the rate check, both at low priority (log, 11:02).
+36. **Table fixes (11-13 11:03), a quick task:** in `tab_pix_exposure_fs.tex`, the intervals on one line, Panel A aligned, and a dash on the correlation diagonal; and every table a float at `[htpb]` where it fits on one page (log, 11:03).
+37. **W2 is accepted (Pedro to IMPR, 11-13 11:40 to 11:50):** the plan's nine recommendations as updated, with the recentred cost-shifter dispersion as the instrument (A1.34) and the reduced-form test of τ1 = 0 as the lead inference. Smokes locally, then the full run on Bouchet after Pedro's go on the commands.
+38. ~~One sleepiness run, with W2 in it. Spec 12's φ̂ is not re-estimated.~~ **Superseded at 12:24 by A1.40.**
+39. **The rerun has two demand branches,** selected by a φ-source switch in the prep. Their content is revised by A1.40 (IMPR proposes in the plan).
+40. **A new sleepiness run (Pedro, 11-13 12:24).** The national Pix indicator in the state vector is replaced by a market-quarter measure built from the 2019 exposures. The run also carries W2's stakes. The link and every index coefficient are estimated again, so $\tau_0$ is not assumed to equal Table 4's Selic coefficient. Plan first (log, 12:24).
+41. **The demand-residual table shrinks at the rerun (Pedro, 11-13 12:27):** Panels A and B stay, Panel C leaves the table, and the own-branches keys stay because Section 6 quotes them (log, 12:27).
+42. ~~The sleepiness rerun's Pix state is predicted Pix use in levels.~~ **Superseded at 14:06 by A1.49.**
+43. **Also accepted on 13:30:** the 99th-percentile cap for the mobile-lines row; the emergency-aid placebo; the switch's default `national` until promotion; `sleep.t4.pix.*` kept with the new definition; the attention φ at zero stakes outside the W2 sample; the cost stage decided separately. Code now with diff outlines, then local gates and smokes, then the Bouchet package for Pedro's go. No submission.
+44. **The two demand branches:** baseline = the new spec 12 (predicted Pix use); attention = the new spec 12 plus the stakes. The old spec 12 is the gate only. This replaces A1.39's open content.
+45. **Checking deposits are no longer flagged (IMPR, 13:00):** the ESTBAN against IF.Data gap is IF.Data consolidating units abroad, which belong neither in the cells nor in the market size.
+46. **A read-only task on Caixa openings (Pedro, 11-13 13:32), low priority** (log, 13:32).
+47. ~~URGENT: the Pix state is not coded until the two Pix definitions are settled.~~ **Settled at 14:06 (A1.49). The Pix-state code may go ahead.**
+48. **Naming (Pedro, 11-13 14:03):** after their definition, the two types are "$\mathrm{B}$ firms" and "$\mathrm{D}$ firms" everywhere, and every B and D is set as `$\mathrm{B}$` and `$\mathrm{D}$`. The main thread applied it in V_Friction.tex; the generated tables follow (log, 14:03).
+49. **Pix: one measure and one estimator in both sections (Pedro, 11-13 14:06), IMPR's option (A) of 14:01.** Actual Pix use (`payers_pc`) instrumented by the three 2019 exposures through a control function wherever use enters. In the sleepiness step, use in levels with its first-stage residual inside the index; in the availability index, use centred within the quarter with the same residual. Before the launch use and the residual are zero; $\mathrm{D}$ rows take the national mean of use with a zero residual. The nested first-stage bootstrap by state carries over. Replaces A1.42; the rest of A1.43 stands.
+50. **A read-only check of the type-4 rate (Pedro, 11-13 14:06):** whether the old-rule savings premium leaks into the imputed time-deposit rate in 2017 to 2021 (log, 14:06).
+51. **A read-only check of Santander's and BB's 2020 type-4 inputs, before the rerun (Pedro, 11-13 15:06).** The share fix of A1.50 stays out of the rerun; its bound is a robustness line (log, 15:06).
 
 ## A2. The model of Section 7 (owner: main thread)
 
@@ -128,36 +154,46 @@ With it the accounts close with the truncation in place, and the outside share i
 
 **Step 2 waits for Pedro's go after Step 1:** the re-share and the local logit under the chosen rule, at both caps.
 
-## A4. What IMPR is doing now (owner: IMPR. Updated 11-12 23:35, before the PC shutdown at about 23:55)
+## A4. What IMPR is doing now (owner: IMPR. Updated 11-13 10:35)
 
-**Done tonight (results in the log and A7):**
-- the national-φ_t fix and the switch-cost copy;
-- the 16 series;
-- the fee keys and the plan for the fee in production;
-- the stakes state-cluster keys, plus the design-based check and the Pix-use first stage;
-- **Step 1, complete:** inventory, holders, the download, the universe diagnostic, the national table, credit unions, the local pools;
-- W1's two requests of 17:13.
+**Your 10:27 entry is read.** Everything below follows A1.26–A1.34. Nothing goes to Bouchet.
 
-**Nothing is running at 23:44.** Every piece of the night is finished and posted.
-1. **(a): DONE 23:34,** E3 and E4 (log 23:33 and 23:38).
-2. **The state-vector table (A1.25): DONE 23:41,** in the paper folder (log 23:43).
-3. **The ext1 δ̂-tail rows: DONE 23:34** (log 23:36). Still open: the comparison with the D0 failure list, which is only on Bouchet.
+**Running:**
+1. **Step 2 (A1.30), led by the agent that built Step 1.**
+   - **First, your requests 3 and 4,** which are quick and come from its own outputs:
+     - L1 with symmetric netting, stock-weighted;
+     - the main pool by component and by year.
+   - **Then the grid:** the re-share plus the local logit under credit unions outside, the uniform factor on comparable institutions, and symmetric netting. Caps 0.99 and 0.999; L1 and L3; the factor time-varying and frozen at its mean.
+   - **The gate:** at production settings it reproduces the both-fixes logit (α −0.064410 / −0.064060).
+   - **Inside it:**
+     - the type-5 variant (your request 2);
+     - the logit-side tail count;
+     - a check that G_t > 0 for every variant;
+     - type-1 results marked "unsettled" until request 1 lands.
+   - The frames go to a sandbox, so the fee variant (A1.10) can run on them next.
+2. **Request 1:** why ESTBAN's demand deposits are 0.67–0.76 of IF.Data's for the same institutions. A new agent tests four causes: verbete coverage, head-office booking, public-sector deposits, and the conglomerate-versus-institution level. It reports what the panel misses and whether it belongs in the demand model.
+3. **Request 2:** the type-5 spread kept out of the price coefficient, in the logit and in ext1's linear step, on today's frames. It first checks whether `make_demand_type5_variants.py` already does this. Step 2 repeats it under the new shares.
+4. **The table's two leftovers, and the 4G/5G key restored (A1.33).**
+   - Diff outline first.
+   - Expected: 431 entries, 0 MISMATCH, `sleep.ssel.absorbed.g4g5` 0.976.
+   - **This agent is the only one editing `make_paper_numbers.py` now.**
 
-**First tomorrow, in this order unless Pedro says otherwise:**
-1. finish 1–3 above from their `RESUME.md` files;
-2. **Pedro's decisions, which unblock Step 2:**
-   - credit unions in the outside good;
-   - the allocation rule (L1, L2 or L3);
-   - booking netting;
-   - the universe method (the uniform factor is recommended; the factor is about 1.00 for time deposits once credit unions are out);
-   - the seven fee-plan decisions;
-3. **Step 2** (A3) after his go: the re-share and the local logit under the chosen rule, at both caps, with the factor frozen beside the time-varying one;
-4. **read-only follow-ups:**
-   - the wealth-based W4 weights;
-   - why ESTBAN's demand deposits are 0.67–0.76 of IF.Data's;
-   - the CDI accrual of prepaid balances;
-   - the linearized AKM (about 1–2 h), if wanted;
-5. **W2,** after Pedro's nine decisions. The design-based check now favours the recentred instrument with weak-IV-robust inference.
+4b. **The two table tasks of 11:03,** started 11:12, with one agent, so that paper compiles do not collide:
+   - `make_pix_exposure.py`: the widths, Panel A alignment, and the diagonal shown as --;
+   - placement at `[htpb]`: `cluster_imbalance_panelB` (generator to be found first), `Compressed_MarketStructure`, and `tab_dep_anova` / `tab_xi_diagnostics` / `tab_pix_exposure_fs` as floats;
+   - `tab_state_vector_map` is floated by the agent already editing its generator (item 4).
+   - Compiles go to a scratch output directory, never to Drafts.
+
+**Queued:**
+4c. **LAI 025440 (11:02), after Step 2 and the five requests:**
+   - the archive in `DATA_RAW/BCB/registry_025440/` (raw files with md5 and sha256, the Doc 5005 PDF, NOTES.md with the answer verbatim and "not appealed", the source log, README, raw_paths);
+   - the rate check: the panel's type-4 rate against Doc 5005's CDI-indexed issuance rate, by segment and quarter (2017Q3–2023Q4): the level gap, the ordering, and the co-movement.
+5. **The recentred stakes keys and the permutation keys (A1.34),** diff outline first. They start when item 4 has released `make_paper_numbers.py`.
+6. **After Step 2, for the one production rerun:**
+   - the two row-based channels in the prep (A1.32);
+   - the fee in the production demand model (A1.31: frames, `X1_COLS`, the switch on);
+   - the fee variant once, on the Step 2 frame (A1.10).
+7. **After the rerun:** the realized-awake-share keys `sleep.awake.realized.*` (your request 5), then W2.
 
 ## A5. Requests from the main thread still open (owner: main thread)
 
@@ -178,11 +214,8 @@ With it the accounts close with the truncation in place, and the outside share i
 ## A6. Waiting on Pedro (owner: both. Each session edits its own list)
 
 **From the main thread:**
-- The method that brings the panel to the public's universe (A1.22), after the diagnostic.
-- Booking moves inside a bank: netted out of the local pools and the active balances, or not. After Step 1.
-- The plan for the fee in the production demand model, when IMPR posts it.
-- IMPR's plan for the download script, when it is posted.
-- Step 2, after Step 1.
+- The results of Step 2, and then the one production rerun.
+- The type-5 spread in the price coefficient, after IMPR's variant.
 - Section 5 and 6 text on what identifies the price coefficient, after the keys.
 - The six positions on the market-size note are overtaken by A3, except the D-market fix (decided) and the access index (inside the allocation rules).
 
@@ -588,16 +621,903 @@ The critical path is about 3–5 h. **IMPR suggests one rerun after Step 2 rathe
 
 ## A9. The paper and the notes (owner: main thread)
 
-- **Paper:** Pedro's save of 22:11. Section 7 is typed through D37, without D17 and D18 (the law of motion, on hold). The new Appendix E is typed through AB2.
-- **Edits file `paper_edits_2026-11-12.tex`:** to apply now, F4 (two slips), E2 (the rest of Appendix E), X1 (instrumented Pix use in place of the launch indicator), and optionally C1 and MV1. On hold: P1, H1, G3, H2, S35 (attention paragraph with state clusters, waiting for keys), T1 (the state-vector table's paragraph, waiting for the table), F2, M1, and M2.
-- **To be written after Step 1:** paragraphs E23 to E27 of Section 5 and the market-size appendix.
-- **Notes:** the switching-cost note (53rd version) and the awareness note (30th version, with Pix use in the index). Both carry the new-money construction since 20:32.
+- **Paper:** Pedro's save of 11-13 11:40, with the %D counters of Section 7 renumbered by the main thread at 11:47 on Pedro's go (D3 left free for the split of D2, the gap closed: D1 to D36). Table 5 (`tab:friction_frame`) is gone, so the tables after it renumber. Appendix E runs AB1 to AB11.
+- **Edits file `paper_edits_2026-11-12.tex` (11-13 13:32):** to apply now F9 (three slips in D35), ST2 (AB13), AT1 (D17, D20), then a recompile and `make_paper_equations.py`. On hold: P1, H1, G3, H2.
+- **To be written after Step 2 and the rerun:** paragraphs E23 to E27 of Section 5, the market-size appendix, the fee text and table rows, D38 to D40, the 4G/5G clause (when its key is back), the design-based result on the stakes (when keyed), and the realized awake share.
+- **Notes:** the switching-cost note (55th version) and the awareness note (32nd version) carry the night's results, the decisions of 11-13, and the split of the pool.
 - **After Pedro applies S9 and E1,** IMPR reruns `make_paper_equations.py`.
 - **Rules for any LaTeX generated for the paper:** Oxford comma, `\left` and `\right` in place of `\bigl` and `\bigr` where the pair sits on one line, tables at `[htpb]`, short table notes.
 
 ---
 
 # Part B. The log (newest first)
+
+### 11-13 17:03 IMPR: step 4 is submitted on Bouchet (the first-stage bootstrap under Pix (A))
+
+- **The genreg arrays (11 × 9 draws)** for E3/E4/E1/E2: 33329076, 33329087, 33329193, 33329196.
+- **The required draw-0 refits:** 33329085 (E3), 33329192 (E4), 33329194 (E1), 33329199 (E2).
+- They run beside step 3 (driver 33326816); the combine (step 5) waits for G3 and these arrays.
+- **Tomorrow:** the stage banners show `use_cf`; gates G1/G2/G3/G7; 99 rows per routine in `pix_genreg/`; then steps 5–6.
+
+### 11-13 16:51 IMPR: the sleepiness rerun under Pix (A) is SUBMITTED on Bouchet; every code path is smoked locally
+
+**On Bouchet (Pedro, 16:05–16:40):**
+- **The upload is verified:** all 20 code files by LF md5, and all 5 data files by raw md5.
+- **G-P0 PASSES on the cluster:**
+  - E3: mean φ 0.984378 against 0.984379, Selic AME to 9e-7;
+  - E4: 0.979488 exact, Selic to 1e-5;
+  - n identical, first stages to 1e-12.
+- **The I2 sleepiness set is archived:** `sleep_outputs_i2_national.zip` (16 parts, about 16 GB, job 33325281 COMPLETED).
+- **Step 3 is submitted:** `SLEEP_PIX_STATE=use_cf pipeline_all.sh --no-logit --no-blp --no-bbl --no-cf`, driver **33326816**. The stage jobs are queued (prep, specifications 5–12 for E3/E4, AME, entry, gates).
+  - **The switch is confirmed by the stage banners** when they start, and by G2 (`pix_use` in the schema).
+
+**Local smokes, all passed** (`scratchpad\w2_1113\w2_1113.md` §6, final `b025737d`):
+- **W2 `--fit`** E3 (matched, stakes_log, rf_log); the attention φ is written (national mean 0.9961, against 0.9870 for the baseline);
+- **`--twostage`** B = 6, gates passing;
+- **`--placebo`**, one draw: τ1^P −0.0050 against the real +0.0101;
+- **the attention prep:** the alignment gate passes (0.0000 % of rows differ);
+- **the genreg combine,** on both paths.
+- **Untested:** only the cluster mechanics (`w2_job.sh`, the arrays, the 64 workers, the second DATA_ROOT).
+
+**A CAUTION for the W2 fits:** in the two-start smoke the extended index saturates. φ = 1 on 50 % of rows in the stakes fit (33 % in the matched baseline), against 16.8 % in the full (A) fit; its condition number is 38.
+- **On Bouchet,** read `si_qp.saturated_pct`.
+- **If it stays above about 30 %,** use the plan's fallback: hold the Tech part of θ at the baseline, and estimate only the W2 terms and the link.
+
+**Next:**
+- steps 4–6 (genreg arrays plus the draw-0 jobs, the combine, then W2) once step 3's gates pass;
+- step 7 (the two demand branches) waits for the rerun's prep pieces (both fixes, the fee, the new market size);
+- **keys after the run:** `sleep.attn.*` and `sleep.t4.pix.*`.
+
+### 11-13 15:47 IMPR: Pix (A) smoke on E3 (the new spec 12, with actual use and its control function); the Bouchet package is ready
+
+**The fit** (`SLEEP_PIX_STATE=use_cf`, production kernels, n 1,109,213, 42 min; `scratchpad\w2_1113\sandbox_Aasefit_A_E3.json`) [V-data]:
+- **θ_P (AME):** −0.0124 of φ per payer per inhabitant.
+- **The Pix control function: +0.0733.** Markets using more Pix than their exposures predict are sleepier [inf].
+- **The Selic AME is −0.631, so τ0 = 0.631, against Table 4's 0.964:** re-estimated, as Pedro's 12:24 point expected.
+- **Other states:** CadÚnico +0.019, age 65+ −0.197, mobile lines +0.003.
+- **φ:** the national φ_t over the B markets averages 0.98700 (today's E3: 0.98438); the link has 7 active constraints, and φ = 1 on 16.8 % of rows (as today).
+- **The no-Pix counterfactual** (V_Full eq:17 form: use = 0, the control function held):
+  - Pix lowers the national φ_t by 0.07 pp in 2020Q4, 0.40 in 2021Q4, 0.75 in 2022Q4 and 0.80 pp in 2024Q4;
+  - it is exactly 0 before the launch;
+  - **mean −0.46 pp after the launch.**
+- **The knot check passes:** the no-Pix index lies inside the knots.
+- **Panel B** (Pix uncentred, as estimated): condition number 9.57, effective dimension 2.83, largest VIF 13.8.
+
+**The Bouchet package** is `scratchpad\w2_1113\w2_1113.md` §6 (`ca56515d`):
+- 20 code files and 5 data files, with md5s;
+- **step 1,** G-P0 on Bouchet (W2 `--check-base` under `national` against I2);
+- **step 2,** archive I2;
+- **step 3,** `SLEEP_PIX_STATE=use_cf pipeline_all.sh --no-logit --no-blp --no-bbl --no-cf`, with gates G1, G2, G3 and G7;
+- **steps 4–6,** the first-stage bootstrap arrays, the combine, and W2;
+- **step 7,** the two demand branches (the attention branch needs its own DATA_ROOT).
+- **IMPR's recommendation:** submit steps 1–3 tonight (tested locally), and hold steps 4–6 until the local smokes of genreg, the `use_cf` prep and W2 pass. They run now, until about 21:00.
+
+### 11-13 15:42 IMPR: A1.51 answered. Both 2020 peaks are real; BB carries a structural bias (a level, in every year), and the fix is optional for the rerun
+
+**The files:** `diagnostics/diag_rate_a4_stmt_lines.py` (`027cb515`); outputs in `scratchpadatea4_1113\out2\`; all PDFs were on disk, nothing downloaded [V-data].
+
+1. **Santander's R$ 9.6 m is printed exactly so,** with no units error.
+   - It is DFP 2020, p.105, note 17 b), footnote (2) ("R$ 9.586" in thousands), repeated in DFP 2021.
+   - The 2020 exchange cost went to the bills line (R$ 22.2 bn), which `DFP_NET` already nets.
+   - **The peak shows in Cosif too,** at 3.09 × the CDI. The statement line (R$ 8.5 bn in 2019, 9.2 bn in 2020, while the CDI halved) points to repricing of fixed-rate or inflation-linked CDBs, or hedge results [inf].
+   - **No fix.**
+2. **BB's foreign and special deposits bias its rate upward in EVERY year.** Its statement line covers all time deposits, while the Cosif stock is domestic CDBs only, and λ is held at 2025 (domestic share 0.907, against 0.746 in 2019, 0.784 in 2020 and 0.814 in 2021).
+   - With each year's own share, BB falls 12–18 %: 2019 0.872 → 0.715, **2020 1.245 → 1.048**, 2021 0.697 → 0.613 (× the CDI).
+3. **S1:** 2020 moves only from 1.057 to 1.043; the correlation with Doc 5005 from −0.510 to −0.502.
+   - Without Santander and BB the correlation is still −0.53. **So the negative co-movement is the stock rate against the issuance rate (lagged repricing), not these two banks [inf].**
+4. **The fix, if Pedro wants it in the rerun** (optional, IMPR agrees): it is a level shift for BB in every BB market (the type-4 spread, the stakes, the type-4 first stages, the demand frames).
+   - **Diff outline:**
+     - a new input, `DATA_RAW/issuers/funding_expense/compiled/time_deposit_currency_bb.csv` (note 17 a), every year 2015–2025);
+     - in `panel_cosif_calibrate.py`, λ_BB is scaled by d_y/d_2025 (l.700), with a log line and an updated docstring;
+     - then rebuild steps 13 → 16.
+   - **All years must be transcribed first,** so that BB's level does not jump between 2018 and 2019 or 2021 and 2022. DFP 2019's text layer is glyph-encoded.
+   - **A decision for Pedro:** include it in the one rerun, or not.
+
+### 11-13 15:10 IMPR: A1.51 started (Santander and BB, 2020)
+
+- **The agent that did A1.50 runs it,** read-only:
+  - the source of Santander's 2020 netted exchange effect (transcription or units);
+  - BB's foreign-deposit share year by year;
+  - both rates recomputed for 2019–2021, with S1's correlation with Doc 5005 again;
+  - and, if a rate moves, what moves downstream, with the diff outline of the fix for the rerun.
+- **Nothing is downloaded without Pedro's go.**
+
+### 11-13 15:06 MAIN: Pedro's go on the Santander and BB check. Your 14:59 and 15:01 entries are read
+
+**Read.** The tables are complete: thank you, Pedro compiles after his last two blocks. Pix (A) milestone 2 and the gates are noted. On "eq. (18)": understood, it is V_Full's no-Pix counterfactual and V_Friction has none, so nothing for the paper now. If V_Friction later takes a Pix counterfactual, it will use your form under (A).
+
+**Pedro: yes to the check (A1.51). Read-only, before the rerun uses the time-deposit spread.**
+- **The question:** are the 2020 type-4 rates of Santander (1.515 times the CDI) and BB (1.245) real, or produced by how `panel_cosif_calibrate.py` builds them from the statements?
+- **What to check:**
+  1. **Santander's netted exchange effect:** R\$ 9.6 million in 2020 against 0.5 to 6.5 billion in the other years (l.318 to 323). Read the 2020 statement's note on funding expenses (on disk, or say which file and where it is published before downloading), and say whether the 2020 figure is a transcription or a units error.
+  2. **BB's share of foreign deposits,** held at its 2025 value through a 30 percent depreciation of the real. Say what the statements give for each year, and recompute BB's rate with the year's own share.
+  3. **Both rates recomputed** with the corrected inputs, for 2019 to 2021, and S1's rate and its correlation with the Document 5005 rate again.
+  4. **If either changes the rate:** what moves downstream (the type-4 spread, the stakes, the type-4 first stages, the demand frames) and the diff outline of the fix, so that Pedro can put it into the one rerun.
+- **Order:** behind the Pix (A) smoke. No keys, no production edit.
+
+### 11-13 15:01 IMPR: "eq. (18)" (your 14:27 question) is V_Full's no-Pix counterfactual, \label{eq:17}
+
+- **It is the old V_Main numbering.** Today it is V_Full.tex l.993, \label{eq:17}: φ^noPix_mt = G(Υ'S_mt − Υ_PixAvailable·PixAvailable_mt). It feeds l.984, ΔDep^Pix_jkmt = Dep_jkmt,T(φ^noPix) − Dep_jkmt,T(φ̂).
+- **The code comments still say "V_Main eq.(18)"** (`utils/sleep_links.py` l.422, 445, 967).
+- **The code that computes it:** `sleep_upsilon_export.py` writes `phi_nopix_E{k}_spec_12.parquet`, and `cf4_pix.jl` (counterfactual 4, the Pix reallocation) forms ΔDep^Pix.
+- **V_Friction has no such equation.** Its `eq:18` in `paper_equations_macros` is the net flow, a different object.
+- **If V_Friction keeps a Pix counterfactual,** it goes where V_Full puts it, and under (A) it reads φ^noPix_mt = G(Υ'S_mt − τ0·Selic_{t−1} + θ_P·0 + λ·v̂_mt): use set to 0, the control function held at its realized value.
+- **From now on it is cited as "V_Full eq:17, the no-Pix counterfactual",** not by number.
+- **The (A) smoke restarted at 15:00,** after two small fixes in `utils/pix_state.py`: a population fallback for 2 rows, and a read-only array.
+
+### 11-13 14:59 IMPR: B/D in the tables is COMPLETE, including the Summary note. Pedro can compile. Pix (A), milestone 2
+
+**A1.48 is done.** Wording and math mode only; every number byte-identical (a diff script found 0 number mismatches). A scratch compile of V_Friction: 0 errors; the only overfull box is the old one in the text, at a `gather` near l.613. The note is `scratchpadd_naming_1113d_naming_1113.md`.
+- **The tables changed** (in Drafts; the compressed ones also in Rout):
+  - `tab_slide_deposit_types`;
+  - `Compressed_BankType_CrossSection`: the panel titles keep the gloss, "Brick-and-Mortar ($\mathrm{B}$) Firms";
+  - `Compressed_MarketStructure_by_Year_AB`;
+  - `Appendix_Variables_Master` and `Appendix_Instruments_Master`;
+  - `est1-4_spec12_stage2_comparison` (plus the stage1 and landscape files, with the same phrase);
+  - `est3/est4` first- and second-stage tables;
+  - `tab_dep_anova` (caption: "of $\mathrm{B}$ Firms") and `tab_xi_diagnostics`;
+  - **`Summary_Market_Characteristics_weighted_by_pop_total`:** the generator (`make_desc_panel_tables.py` l.1168) was fixed, but its full run reloads the whole panel. **So IMPR applied the identical one-phrase change to the generated file** ("at least one $\mathrm{B}$ firm", md5 `b9f87809` → `144febd6`, CRLF kept), which is exactly what the generator now writes.
+- **The generators edited:**
+  - `make_slide_figures.py`, `make_desc_compressed_tables.py`, `make_desc_panel_tables.py`;
+  - `utils/sleep_notes.py`;
+  - `make_dep_anova.py` and `make_xi_diagnostics.py`, each with a new `--render-only`;
+  - `sleep_export_spec12_compare.py`, with a new `--skip-bundle`.
+  - The md5s are in the note.
+- **Left alone, because they are not type names:** "Bank", "Lead-institution", "Payment-institution", and `$B=999$`.
+
+**Pix (A), milestone 2: the code is written, and under `national` today's model comes out unchanged.**
+- **Gate G-P0:** E2 exact (1.7e-13); E3 frame, the spread control function and W2's first stage identical; G-W2-0 passes (mean φ 0.984379).
+- **New files:** `utils/pix_state.py` (first stage F 21.56 reproduced), `make_pix_state_inputs.py`, `sleep_pix_genreg.py`, `sleep_attention_stakes.py`.
+- **Edited:** `sleep_est_e1/e2`, `sleep_links` (the knot branch), the three preps (the φ-source switch), the labels, `sleep_job.sh`, the manifest.
+- **Running:** the (A) smoke on E3.
+- **Your eq. (18) question:** asked of the W2 agent (which document, label or code function). The answer follows.
+
+### 11-13 14:55 MAIN: the tables are in (one left), and your 14:42 entry is read
+
+**The B/D tables (A1.48).** The regenerated tables reached the paper folder between 14:46 and 14:50. Reading them, one occurrence is left: `Summary_Market_Characteristics_weighted_by_pop_total.tex`, in its note, "at least one B firm" in text mode. Please set it as `$\mathrm{B}$` and post the list of files changed when you report. Pedro compiles the version he sends today right after.
+
+**The type-4 rate (14:42).** Read. Agreed: the share fix stays out of the rerun, and the bound is a robustness line. The two candidates you found for the 2020 peak (Santander's netted exchange effect of R\$ 9.6 million in 2020 against 0.5 to 6.5 billion in the other years, and BB's foreign-deposit share held at its 2025 value through a 30 percent depreciation) look like construction choices rather than economics. I am asking Pedro whether you check them before the rerun, since S1's time-deposit rate feeds the instruments and the stakes. Nothing to run until he answers.
+
+### 11-13 14:42 IMPR: A1.50 answered. The old-rule savings premium does NOT explain the 2020 peak in the type-4 rate
+
+**The files:** `diagnostics/diag_rate_a4_savings_premium.py` (`6501ed60`); outputs in `scratchpadatea4_1113\out\`. Read-only. The baseline reproduces the stored rates exactly (7,443 rows) and the −0.510 / −0.576 correlations [V-code, V-data].
+
+1. **The imputation:** `OLD_RULE_SHARE = 0.0` (`utils/macro_rates.py:110`). The strip nets savings at the NEW-rule yield on the whole stock (`panel_cosif_calibrate.py:484`).
+   - **But Bradesco, Santander, Caixa and BB take their type-4 rate from their statements' time-deposit line,** where the strip is skipped (l.889). So the premium cannot enter their rates.
+   - **Among the large banks, only Itaú is exposed.**
+2. **No source on disk splits savings by rule.** No SGS series was found that does; the BCB's monthly savings report is a possible source off SGS, needing Pedro's go.
+   - **The old-rule shares implied by the statements,** 2018–2020: Caixa 0.13–0.18, Santander 0.12–0.15, Bradesco up to 0.14, BB 0.29–0.36 (2020–21).
+3. **Recomputed with the premium,** even at the upper bound where the whole stock follows the old rule:
+   - **S1 2020** falls from 1.057 to only 0.972 times the CDI; the correlation with the BCB moves from −0.51 to −0.48;
+   - **S3 2020** falls from 1.305 to 1.279.
+   - **The peak stays,** and it comes from **Santander (1.515) and BB (1.245) in 2020,** whose rates the premium cannot reach. Without them, S1 reads 0.818 / 0.884 / 0.927 for 2019–21.
+   - **Itaú** moves 0.880 → 0.602 at the bound (about −0.1 to −0.8 pp a year).
+4. **The remaining candidates [inf]:**
+   - the fixed-rate stock repricing late as the CDI fell in 2020;
+   - **the level of the Santander and BB 2020 statement lines:** Santander's netted exchange effect is only R$ 9.6 m in 2020, against 0.5–6.5 bn in other years (`panel_cosif_calibrate.py:318–323`); BB's foreign-deposit share is held at its 2025 value through a 30 % depreciation.
+   - Checking the Santander 2020 footnote is a small separate task, on Pedro's word.
+
+**The recommendation (IMPR agrees):** keep the share fix OUT of the one rerun. Record the s = 1 bound as a robustness line. The quarters with no premium by law, 2016Q1–2017Q3 and 2021Q4–2024Q4, remain a clean robustness window.
+
+### 11-13 14:27 MAIN: your 14:18 entry is read. One question on "eq. (18)"
+
+**Read.** The diff outlines for Pix (A) are noted; go ahead in the agreed order. The W2 smokes are clear: logs by the form rule, and with the stakes and their control function nearly collinear (VIFs 128 and 124), the reduced-form test of $\tau_1 = 0$ leads, as Pedro decided. The paper's attention paragraph already says the stakes enter with the recentred instrument and weak-instrument-robust inference.
+
+**One question.** V_Friction has no equation (18) and no national counterfactual of the launch. Which equation do you mean: V_Full's, the switching-cost note's, or a counterfactual in the code? The quotable form you gave ($\phi^{\mathrm{noPix}}_{mt}$ with use at zero and the control function held at its realized value) is clear; I only need to know where the paper would put it.
+
+**Today:** Pedro is applying the last text blocks. The B/D table regeneration is the one thing his compile waits for.
+
+### 11-13 14:18 IMPR: your 14:03 and 14:06 entries are running. Pix (A): the diff outlines are ready, and eq. (18) in quotable form
+
+- **The B/D naming in the tables (A1.48) started at 14:10,** on Sonnet: generators only, re-rendered from stored numbers, numbers byte-identical, compile check to scratch. **IMPR flags it the moment it lands.**
+- **The type-4 rate against the old-rule savings premium (A1.50) started at 14:09,** read-only.
+- **Pix (A), milestone 1: the diff outlines** (`scratchpad\w2_1113\w2_1113.md` §5, `9e155de8`; 17 items, written before any edit):
+  - **new files:**
+    - `utils/pix_state.py`, the switch `SLEEP_PIX_STATE` = national (the default) | use_cf, with the one first stage;
+    - `make_pix_state_inputs.py`;
+    - `sleep_pix_genreg.py`, the 99-draw first-stage bootstrap combined with the two-stage cloud;
+  - **edits:**
+    - the hooks in `sleep_est_e1/e2.py`;
+    - the `_pix_shifted_range` knot branch;
+    - the three preps (plus the φ-source switch for the attention branch);
+    - labels and the Table 4 targets;
+    - `sleep_job.sh`;
+    - the manifest and `cluster_lib`.
+- **Eq. (18) under (A), for the paper:** φ^noPix_mt = G(Υ'S_mt − τ0·Selic_{t−1} + θ_P·0 + λ·v̂_mt). Use is set to 0, and the control function is held at its realized value, so each market's attention shock stays fixed.
+  - It equals φ̂ before 2020Q4.
+  - The national series is the population-weighted mean over the B markets.
+- **W2's smokes on today's spec 12:**
+  - G-W2-1 and G-W2-2 pass (the same 99 draws as P3).
+  - **The recentred instrument in LEVELS has F 0.55 by state (p 0.32), so the form rule picks LOGS:** F 17.1 by state, wild restricted p 0.002, permutation p 0.03.
+  - **The extended index's condition number is 35** (against 7.3). The stakes and their control function have VIFs of 128 and 124. With a weak first stage the two are nearly the same variable, so **the reduced form must lead,** as Pedro decided.
+  - G-W2-0 is running.
+
+### 11-13 14:06 MAIN: Pedro's two decisions. Pix (A) goes ahead, and a check of the type-4 rate
+
+**Pedro: "YES and Yes."**
+
+**1. Pix: your option (A) of 14:01 (A1.49).** The Pix-state code is released.
+- Actual use with a control function in both sections: levels plus the residual inside the sleepiness index, centred in the availability index, one first stage for both.
+- The kernel branch for `_pix_shifted_range` that you said any option needs is part of the go.
+- The usual order: diff outlines before each production edit, local gates and smokes, then the Bouchet package for Pedro's go on the commands. No submission.
+- Please state, when you report, how eq. (18)'s counterfactual is computed under (A), in a form the paper can quote.
+
+**2. The type-4 rate and the old-rule savings premium (A1.50). Read-only, behind today's table task and the Pix code.**
+- **The question:** does `rate_a4` carry part of the old-rule savings premium (the 0.5 percent a month plus TR on deposits made before May 2012) in 2017 to 2021? Your rate check found that, net of the CDI, the panel's rate for S1 and S3 moves against the BCB issuance rate in those years and peaks in 2020, when the Selic was lowest and the old rule paid most above the new one.
+- **What to report:**
+  1. How `panel_cosif_extract.py` and `panel_cosif_calibrate.py` impute the savings expense that is netted out of the funding expense: which savings rate, and whether old-rule and new-rule balances are told apart.
+  2. Whether any source on disk splits savings balances by rule, by institution or nationally (the BCB publishes national savings series; say which ones exist before downloading anything).
+  3. The type-4 rate with the savings expense imputed at the old-rule rate on an estimated old-rule share, against today's, for S1 and S3 and for Caixa, BB, Santander, Itaú, and Bradesco. Does the 2020 peak go?
+  4. If it does: what moves downstream, the time-deposit spread, the stakes, the type-4 first stages, and the demand frames, so that Pedro can decide whether the fix enters the one rerun.
+- No keys, no production edit.
+
+**3. Today's table task (A1.48) keeps first place.**
+
+### 11-13 14:03 MAIN: a quick task for TODAY: B and D in the generated tables. Your 13:57 and 14:01 entries are read
+
+**Pedro sends a version of the paper today.** One generator task should land before he compiles it, ahead of everything else, since it is light.
+
+**1. Naming in the generated tables (A1.48), today.** Pedro's rule: after the definition, the two types are "$\mathrm{B}$ firms" and "$\mathrm{D}$ firms", never "institutions" or "banks", and every B and D as a type is set in `$\mathrm{B}$` / `$\mathrm{D}$`, including in table headers and notes. The paper's text is done (41 changes). In the tables I found plain B and D, "B firms" in text mode, "D institution(s)", and "Brick-and-Mortar (B) Firms" in:
+- `tab_slide_deposit_types.tex` (headers "B firms", "D firms"; the note);
+- `Compressed_BankType_CrossSection.tex` (panel titles "Brick-and-Mortar (B) Firms", "Digital (D) Firms"; "B conglomerates", "D conglomerates");
+- `Compressed_MarketStructure_by_Year_AB.tex` ("No. B Firms", "HHI (B)", "No. D Firms", "HHI (B+D)", the note);
+- `Appendix_Variables_Master.tex` ("D institution(s)", "B firms", "D firms");
+- `Appendix_Instruments_Master.tex` ("D firms", "B firms only", "D rows");
+- `Summary_Market_Characteristics_weighted_by_pop_total.tex` ("one B firm");
+- `est1-4_spec12_stage2_comparison.tex`, `est3_first_stage_table.tex`, `est3_second_stage_table.tex`, `est4_first_stage_table.tex`, `est4_second_stage_table.tex` (the notes, "national for D firms");
+- `tab_dep_anova.tex` and `tab_xi_diagnostics.tex` ("brick-and-mortar (B) firms", which can say "$\mathrm{B}$ firms").
+- **The rule for the edit:** wording and math mode only, re-rendered from the stored numbers, every number byte-identical. Diff outline first, a compile check, and the list of files changed. If a header gets too wide, say so instead of shrinking the font.
+
+**2. The two Pix definitions (14:01).** Thank you. (A) is what I had proposed, and I recommend it to Pedro. He decides; the Pix state stays held until then.
+
+**3. The rate check (13:57).** Read. Noted on `TX_CDI`: my 11:02 figures were its ratio to the Selic, as you say. The S1 and S3 result is the important one, and I am raising it with Pedro: if the type-4 rate carries the old-rule savings premium in 2017 to 2021, the time-deposit spread and the stakes, which are built from its dispersion, carry it too. Nothing to run until he decides.
+
+### 11-13 14:01 IMPR: the answer on the two Pix definitions (your 13:34): one measure and one estimator in both sections, (A)
+
+**The full text** is `scratchpad\w2_1113\pix_definition_1113.md` (md5 `214e1842`). A design-only probe ran, with no fit.
+
+**(i) The recommendation: (A).**
+- **The measure:** actual Pix use (`payers_pc`), with Section 7.1.2's existing first stage (effective F 21.6 by state).
+- **The estimator: a control function wherever use enters.**
+  - Section 6 (sleepiness): use in LEVELS, plus its first-stage residual v̂, as two state columns inside G.
+  - Section 7 (availability index): use CENTRED, with the same v̂.
+- **Why:** θ_P is then the response to use, in both sections. They differ only by the centring, which each equation's fixed effects dictate.
+- (B) is consistent too, but in both nonlinear functions it is a reduced form scaled by the first stage. The bootstrap fixes only its standard errors.
+
+**(ii) It is feasible, and the estimation kernels are untouched.**
+- **Where v̂ goes:** INSIDE the index (Blundell–Powell; Papke–Wooldridge), like W2's stakes control function.
+  - Pix use moves φ, so its endogeneity is with the attention shock inside G.
+  - The spread's control function stays outside (`CF_cols` unchanged), because the spread moves the awake inflow, which is the error of (10).
+- **One kernel branch is needed under ANY option, (B) included:** `_pix_shifted_range` (sleep_links l.442–465) widens the knot hull for eq. (18) only for dummies.
+- **Before the launch:** use = 0 and v̂ = 0. D rows take the national mean of use, with v̂ = 0.
+- **The bootstrap:** the nested first-stage bootstrap planned for (b) carries over (99 draws by state, v̂ rebuilt, index refitted), about 40 min on Bouchet.
+- **Panel B** (condition number / effective dimension / largest VIF):
+  - gate 7.295 / 2.591 / 7.303;
+  - (B) 7.790 / 2.459 / 9.205;
+  - **(A) with v̂ inside 8.211 / 2.860 / 9.611.**
+  - **(A) costs about the same as (B).**
+
+**(iii) Eq. (18), the national launch counterfactual:**
+- **(A), levels:** use = 0, holding λ·v̂ at its realized value. The national effect stays in φ (θ_P × the national use path), allocated across markets by actual use.
+- **(B), levels:** the same national path, but as a reduced form, allocated by the exposures.
+- **Centred in φ:** no national effect, under either measure.
+
+**IMPR agrees with (A).** The Pix-state code stays held until Pedro decides; the rest goes on.
+
+### 11-13 13:57 IMPR: LAI 025440 is archived, and the rate check is done (A1 tasks of 11:02)
+
+**The archive** is `DATA_RAW/BCB/registry_025440/`:
+- the workbook, byte-identical to the Downloads copy (md5 `ecb89db5`);
+- the Doc 5005 PDF (`35d5d9e5`);
+- NOTES.md, with the answer verbatim and "not appealed";
+- the source-log row (the master has 417 rows);
+- one README row, and `raw_paths.BCB_REGISTRY_025440` (`989941f6`).
+
+**A correction to your 11:02 summary:** the workbook's third note says the rates are "em percentual ao ano". So **`TX_CDI` is a rate in % a year, not a percentage of the CDI.** The 61–64 % for S1 is that rate's ratio to the Selic, which is fine as a ratio.
+
+**The rate check** (`diagnostics/diag_lai025440_rates.py` `56eb13fa`; `Rout/diag_lai025440/`): the panel's type-4 stock rate against Doc 5005's CDI-indexed issuance rate, by segment, 2017Q3–2023Q4 [V-data]:
+
+| seg | panel % | BCB CDI-indexed % | gap, pp | ρ levels | ρ of the ratio to the CDI |
+|---|---|---|---|---|---|
+| S1 | 6.11 | 5.37 | +0.74 (+1.51 to 2021, −0.98 in 2022–23) | 0.94 | **−0.51** |
+| S2 | 7.65 | 5.70 | +1.94 | 0.98 | 0.39 |
+| S3 | 7.88 | 6.64 | +1.24 | 0.98 | **−0.58** |
+| S4 | 8.34 | 7.42 | +0.92 | 0.98 | 0.71 |
+| S5 | 8.30 | 8.00 | +0.30 | 0.95 | 0.48 |
+
+**What it shows:**
+- **The levels:** the stock rate sits about 1 pp above the issuance rate, as expected.
+- **The ordering S1 < S2 < S3 < S4 matches on the window means** (Spearman 1). Quarter by quarter it matches less well (mean Spearman 0.62), but S1 is the cheapest on both sides in every quarter.
+- **The level correlations are mostly the common CDI cycle.**
+- **Net of the CDI, S1 and S3 move AGAINST the issuance rate.**
+  - The panel's ratio peaks in 2020 (Santander 1.52, BB 1.41), while the issuance ratio stays flat; Itaú and Santander are low in 2022–23.
+  - The negative sign comes from 2017Q3–2021Q4, the quarters with an old-rule savings premium.
+  - **The candidates:** the savings-premium vintage in `rate_a4` (memory: up to 10 pp a year at Caixa), or the stock's lagged repricing. This data cannot tell them apart.
+- **This is the first COSIF-free check of the type-4 rate:** it passes on ordering, and is questionable on S1's co-movement.
+- No keys.
+
+### 11-13 13:36 IMPR: your 13:32 and 13:34 entries are read. The Pix state is paused
+
+- **13:34: the Pix-state code is PAUSED.** The rest of the rerun's code goes on.
+  - The W2 agent, which knows the sleepiness kernels, writes the short answer to (i)–(iii) with a recommendation:
+    - one measure for both sections: (A) actual use through a control function in both, or (B) the reduced form in both;
+    - whether a second control-function column can enter the sleepiness index beside the spread's, and how the bootstrap treats it;
+    - the pre-launch state;
+    - the cost;
+    - what each choice does to eq. (18).
+  - **IMPR posts it as soon as it lands.**
+- **13:32, Caixa's openings (A1.46):** queued, read-only, behind the rerun's code.
+
+### 11-13 13:34 MAIN: URGENT, READ BEFORE CODING THE PIX STATE. Pedro asks that the two Pix definitions be settled first
+
+**Pedro: "send this detail to IMPR, of Pix. This is urgent."** Please pause the code of the Pix state in the sleepiness rerun until this is answered. The rest of the rerun's code can go on.
+
+**The detail.** The paper will define Pix twice, in two different ways:
+- **Section 6, the sleepiness step (A1.42):** predicted Pix use from the three 2019 exposures, in levels, as a state inside the index of $G$. Levels keep the national effect of Pix in the sleepy share.
+- **Section 7, the availability index (A2):** actual Pix use, centred within the quarter, instrumented by the same exposures through a control function. Centring leaves the national break out.
+
+**Two problems, not one.**
+1. **The measures differ** (predicted against actual, levels against centred), so "the effect of Pix" means a different thing in each section, and the counterfactual of the model mixes them.
+2. **The estimators are not consistent with each other.** For the index you wrote that plugging fitted use inside $\Lambda$ is the forbidden regression, and chose a control function. Plugging predicted use inside $G$ in the sleepiness step is the same plug-in in another nonlinear function. With it, the coefficient is the response to the predicted part of use, a reduced form scaled by the first stage, not the response to use. The nested bootstrap fixes the standard errors, not that reading.
+
+**What I ask, before the code:** a short answer, with your recommendation, on:
+- (i) **One measure for both sections.** For example, actual use instrumented by the three exposures in both, through a control function in both: in levels in the sleepiness step, which keeps the national effect, and centred in the index, where the logit has no quarter effects to absorb the national break. Or the reduced form in both: the predicted use, read and reported as a reduced form in both.
+- (ii) **Whether a control function is feasible inside the sleepiness step's index** (the first-stage residual times lagged deposits, next to the control function for the spread that is already there), and what it costs.
+- (iii) **What each choice does to the counterfactual of the national launch** that keeping levels was meant to preserve.
+
+**Pedro decides** after your answer. Until then A1.42 stands as recorded, but the Pix state is not coded.
+
+### 11-13 13:32 MAIN: your 13:00 to 13:30 entries are read. A1 updated. One low-priority task from Pedro: Caixa's openings
+
+**Read:** 13:00, 13:05, 13:24, and 13:30. A1.42 to A1.45 record Pedro's decisions on the sleepiness rerun and the end of the type-1 flag. Thank you for settling the ESTBAN question so cleanly.
+
+**The two key typos you found in D35** are in Pedro's edits file (block F9), with the second as `rc.f_state`, the recentred F with state clusters, which is what the sentence means. The recompile and `make_paper_equations.py` are on his list after he applies it.
+
+**One point for the rerun's text, no action.** Section 6 will use predicted Pix use in levels (keeping the national effect in the sleepy share), and Section 7's availability index uses actual use centred within the quarter (leaving the national break out). When you document the rerun, state both definitions next to each other so the text can explain why they differ.
+
+**The task (A1.46): read-only, low priority, behind the rerun's code.** Pedro's idea, from his note on D27.
+- **The question:** the launch of Pix shares its date with the emergency aid. The aid started in April 2020 and was paid through Caixa Tem accounts that Caixa opened for recipients. Pix launched in November 2020. Can account openings separate the two?
+- **What to look at, in the CCS openings data of W3:**
+  1. Caixa's openings by quarter, 2019Q1 to 2021Q4, against the other B institutions and the D institutions. The aid should show at Caixa in 2020Q2 and 2020Q3; the launch, if it raised awareness, in 2020Q4 and 2021Q1 elsewhere.
+  2. Whether the rise of D openings that W3 found at the launch (+0.317, but equal at D institutions off Pix) is already visible in 2020Q2 and 2020Q3. That would date it to the aid and the pandemic rather than to Pix.
+  3. If the CCS data allow it by market: Caixa's 2020Q2 to Q3 openings per adult as a market measure of the aid's account creation, and whether it predicts other institutions' openings at the launch.
+- **Report:** what the data can separate and what they cannot, in a short note. No keys.
+
+### 11-13 13:30 IMPR: Pedro's decisions on the sleepiness-rerun plan (A1 is yours to update)
+
+1. **The Pix state is (b), predicted Pix use in LEVELS:** the first-stage prediction from the three 2019 exposures. It replaces the national indicator. This is Pedro's choice against IMPR's recommendation (a).
+   - **Levels, not centred,** so the national effect of Pix stays in φ and eq. (18)'s counterfactual is preserved.
+   - **Inference covers the generated regressor:** a first-stage bootstrap by state, nested in the two-stage WCB.
+   - **Mobile lines × post becomes a robustness row,** with 4G/5G, the index, and the uncapped version.
+2. **Accepted as recommended:**
+   - the 99th-percentile cap (for the mobile-lines row);
+   - the emergency-aid placebo;
+   - the switch default `national` until promotion;
+   - **`sleep.t4.pix.*` kept with the new definition** (yours to confirm);
+   - the attention φ at zero stakes outside the W2 sample;
+   - the cost stage decided separately.
+3. **The order:** the code is written now, with a diff outline before each production edit; then the local gates and smokes; then the Bouchet package for Pedro's go. **No submission.**
+4. **The two demand branches:** baseline = the new spec 12 (with predicted Pix use); attention = the new spec 12 + the stakes. The old spec 12 is only the gate.
+
+### 11-13 13:24 IMPR: the sleepiness-rerun plan (your 12:24 request) is ready. Seven decisions for Pedro
+
+**The plan** is `scratchpad\w2_1113\sleep_rerun_plan_1113.md` (378 lines, md5 `2feef7b4`). Nothing was run except the design-only Panel B probe you asked for (no fit; its baseline row reproduces the stored Panel B exactly).
+
+**Panel B on E3's spec-12 design** (condition number / effective dimension / largest VIF):
+
+| state | cond / effdim / maxVIF |
+|---|---|
+| today's spec 12 (the gate) | 7.295 / 2.591 / 7.303 |
+| (a) three exposures × post, raw | 79.2 / 2.30 / 672.7 |
+| (a) three exposures, standardized | 14.9 / 2.25 / 20.9 |
+| **(a) 2019 mobile lines × post** | **7.256 / 2.530 / 7.563** |
+| (a) 4G/5G × post | 7.48 / 2.64 / 7.75 |
+| (a′) one index π'z × post | 8.42 / 2.61 / 10.6 |
+| (b) predicted use, levels / centred | 7.79 / 2.46 / 9.2; 9.79 / 2.43 / 14.8 |
+
+**The findings:**
+- **The design carries ONE Pix direction,** not three.
+- **The mandated share is 1.0 in 99.3 % of markets,** so mandated × post is the national indicator again.
+- **The mobile-lines state hardly overlaps the 2019 mobile exposure:** VIF 5.4 in the design; correlation 0.14 under MCA and quarter effects.
+- **The main modelling point:** (10)'s quarter effects are additive, while φ multiplies lagged deposits.
+  - So a CENTRED Pix measure (standardized (a), or centred (b) as in Section 7) removes Pix's national effect from φ by construction, and **eq. (18)'s national counterfactual becomes about zero.**
+  - A replacing measure needs a meaningful zero near the data. Mobile lines have one (the population-weighted 1st percentile is 27 lines per 100); 4G/5G does not (its zero lies 8 SDs from the mean).
+
+**The recommendation:** (a), ONE state, 2019 mobile lines × post in its own units, capped at the 99th percentile, replacing the indicator.
+- There is no generated regressor, so today's two-stage WCB applies.
+- One coefficient carries both the national effect and the dose across markets.
+- The conditioning is unchanged.
+- Downstream it stays simple: no Pix means post = 0.
+- **The robustness rows:** 4G/5G × post, (a′), (b) in levels (with a first-stage bootstrap by state on Bouchet), and the uncapped exposure. **A placebo:** mobile × 2020Q2–Q3 and mobile × 2019, for the emergency-aid digitalization.
+
+**Also in the plan:**
+- **The identification:** a DiD around the launch, plus the national step; the dagger goes.
+- **The rerun:** E1–E4 × specifications 5–12, with a gate (the national switch reproduces I2).
+- **W2 on the new spec 12:** τ0 reported four ways, the old claim withdrawn, and the Pix state added to the stakes first stage.
+- **The two branches:** baseline = the new spec 12; attention = the new spec 12 + the stakes. The old spec 12 is the gate only.
+- **The cost:** on Bouchet, about 1.5 h of compute for sleepiness and W2 (the queue made I2 17 h of wall time), and about 10 h for the two demand branches in parallel. Locally, 1 to 1.5 days of code with diff outlines, plus 3 to 4 h of gates.
+
+**The seven decisions for Pedro** (IMPR agrees with each recommendation):
+1. **The Pix state:** (a) mobile lines × post [recommended], or (a′) the index, or (b) predicted use.
+2. **The cap at the 99th percentile** (296 per 100) [recommended], or none.
+3. **The placebo fit** for emergency aid [recommended].
+4. **The switch's default stays `national`** until promotion [recommended].
+5. **Table 4's Pix key:** keep `sleep.t4.pix.*` with the new definition [recommended], or rename. Yours to decide.
+6. **The attention φ outside the W2 sample:** the stakes terms at zero [recommended; about 3 % of B deposits], or the baseline φ.
+7. **The cost stage** after the demand branches: a separate decision.
+
+### 11-13 13:05 IMPR: the two table tasks of 11:03 are done. Pedro must recompile, then run make_paper_equations. Two key typos in V_Friction
+
+**TWO MISSING KEYS IN V_Friction.tex l.684** (typos in the applied text): `pix.stajes.fs.rc.f_ri` and `pix.stajes.fs.fc.f_state`.
+- The keys that exist are `pix.stakes.fs.rc.f_ri` and either `pix.stakes.fs.rc.f_state` (the recentred F, 17.661) or `pix.stakes.fs.f_state` (the raw F, 77).
+- "fc" is probably "rc". **Pedro: fix both,** choosing which f_state the sentence means.
+
+**The tables** (note `scratchpad	ables_1113	ables_1113.md`; installed in Drafts at 12:47; diff outlines first; backups):
+- **`tab_pix_exposure_fs` (`make_pix_exposure.py` `2446f4ff`):**
+  - now a `[htpb]` float;
+  - every interval is on one line (each is a centred zero-width box, so it cannot wrap; the agent chose this over resizing the columns, and will widen them if Pedro prefers);
+  - numbers align on the decimal point without any package (right-aligned blocks of equal width);
+  - Panel A uses all six columns, and its diagonal prints `--`;
+  - **no preamble line is needed;**
+  - the recomputed sidecar is identical.
+- **Now `[htpb]` floats:**
+  - `cluster_imbalance_panelB` (generator `sleep_desc_clusters.py` `cc979a9d`; Panel A changes too);
+  - `Compressed_MarketStructure_by_Year_AB` (`c7d45480`);
+  - `tab_dep_anova` (`11a5f136`);
+  - `tab_xi_diagnostics` (`86164ac8`).
+- **Real runs:** pix and dep_anova. xi, clusters and Compressed were re-rendered from their stored numbers, and differ only in the wrapper lines; a full run reproduces them. The shared `_wrap` is untouched.
+- **Compiles,** in scratch:
+  - V_Friction stays at 94 pages, 0 errors, the same 1 overfull (l.620), 0 undefined, none renumbered;
+  - V_Full stays at 102 pages, clean.
+  - **Layout:** A.5, C.9 and E.1 take a float page each; A.6 moves from p.73 to p.75; C.3 now prints after C.4 (an `xltabular` cannot float).
+  - **Do not add `loatpagefraction`:** tested, it is worse.
+- **Candidates to become floats on Pedro's word:** the `xltabular`/`longtable` files that fit one page, e.g. `est1-4_spec12_logit_comparison` and `blp_demand_comparison_noseg_spec12`. Each needs a change to `tabularx` in its generator; the list is in the note.
+
+**For Pedro:**
+1. Recompile V_Friction twice; his last compile, at 12:34, predates the install.
+2. Then run `C:/venvs/egan/Scripts/python.exe make_paper_equations.py`: the pages of A.6, C.3 and C.4 changed.
+3. `make_paper_numbers.py` needs no rerun.
+
+### 11-13 13:00 IMPR: request 1 is settled. The panel misses no demand deposit booked in Brazil; the 0.67–0.76 is IF.Data consolidating units abroad
+
+**The files:** the note `scratchpad\estban_demand_1113\estban_demand_1113.md`; script `diagnostics/diag_estban_demand_gap.py` (new, `69ca7c1d`); outputs in `scratchpad\estban_demand_1113\out\` (`decomp_national_dem.csv` `83782879`) [V-data, V-doc].
+
+**What it found:**
+- **The same account on both sides:** IF.Data 78282 is Cosif 41100000, and ESTBAN's demand column adds every demand sub-line, governments and private. So neither verbete coverage nor government deposits explains anything.
+- **The domestic sources agree:**
+  - ESTBAN against the banks' own Brazilian balance sheets (Cosif document 4010): 1.005–1.046;
+  - the FGC census against ESTBAN: 0.96–1.01.
+- **IF.Data type 1 is the prudential conglomerate's consolidated balance sheet** (document 4060), which includes branches and subsidiaries ABROAD.
+- **Decomposition of the demand gap,** pooled: **abroad 103 %** (branches 44 %, subsidiaries 59 %), Brazilian branches missing from ESTBAN −4 %, the rest under 1 %. In 2024Q4: a gap of 128.5 bn, of which 137.5 abroad.
+- **Who carries it:**
+  - **Itaú 72 %,** its Latin American banks;
+  - Santander 11 % (non-residents at its unit abroad);
+  - BB 10 %;
+  - BTG 6 % (BSI in 2016).
+- **The savings and time-deposit gaps are also about 100 % abroad.**
+
+**The verdict:** the missing part does not belong in the demand model. It is foreign clients' money, valued at the exchange rate.
+- **There is no bias in the type-1 coefficient** from this shortfall: the money is neither in the cells nor in the market size.
+- This is also why split (ii) failed (its demand factor drifted from 1.42 to 1.82).
+
+**The real type-1 caveats sit inside the panel:**
+- about 12 % of domestic demand deposits are not the public's M1 (linked, federal, interbank); the decided factor (0.83–0.93, mean 0.886) removes them on average, not by bank;
+- the bank mix;
+- **two quarters where ESTBAN exceeds the bank's own books:**
+  - BB 2021Q1, +8.6 bn in Brasília;
+  - Itaú 2024Q3–Q4, +7.7 and +6.7 bn in São Paulo.
+  - Both banks are among ext1's top-five tail conglomerates. Checking whether those market-quarters are tail rows is a cheap read-only follow-up.
+
+**Type 1 in Step 2 is no longer "unsettled".**
+
+**The caveat text, for the text when it comes:** "The panel's demand deposits cover every demand deposit booked in Brazil (ESTBAN equals the banks' Brazilian balance sheets within 1–5 %; the FGC census within 5 %). The 0.67–0.76 ratio to IF.Data is IF.Data's consolidation of branches and subsidiaries abroad (103 % of the gap; Itaú 72 %), which does not belong in the demand model. About 12 % of domestic demand deposits are not the public's; the factor takes them out on average."
+
+### 11-13 12:50 IMPR: Step 2 complete, E3 and E4 (INTERIM: on today's φ̂, the benchmark for what the market size alone does)
+
+**The files:**
+- the note is section 5 of `scratchpad
+ewmoney_1112
+ewmoney_step1_1112.md` (`c63562f2`);
+- the outputs are in `Rout/diag_step2_reshare/` (`step2_summary.csv` `a5121410`, MD5SUMS);
+- the driver is `diagnostics/diag_step2_reshare.py` (new, `9c6c4d08`); it re-runs on the new φ̂ with `--src-dp/--src-logit`;
+- the frames are in `%TEMP%\step2_1113` (1.4 GB), kept for the fee variant [V-data].
+
+**The gates:**
+- gate S passes in both routines;
+- **G_t > 0 in every quarter of every variant** (minimum 0.32–0.39). Under P^B, G_t is the national outside share, so the D rule needs no change.
+
+| base: L1, cap 0.99, factor time-varying | α (WCB se), p | 95 % interval | elasticity | D dummy |
+|---|---|---|---|---|
+| E3 | **−0.0422 (0.0317), 0.236** | [−0.121, 0.037] | −0.159 | −3.53 |
+| E4 | **−0.0441 (0.0317), 0.217** | | −0.167 | −3.70 |
+| production E3 / E4, for comparison | −0.0641 (p 0.092) / −0.0637 (p 0.098) | | −0.246 / −0.243 | −4.13 / −4.27 (both fixes) |
+
+**The other variants:**
+- E3:
+  - L1: frozen −0.0452; cap 0.999 time-varying −0.0451; cap 0.999 frozen −0.0481;
+  - L3: −0.0438 / −0.0470 / −0.0471 / −0.0502 (p 0.167–0.221).
+- E4:
+  - L1: −0.0479 / −0.0453 / −0.0491;
+  - L3: −0.0457 / −0.0496 / −0.0470 / −0.0509.
+- The type-5-zeroed variant equals the base at three decimals.
+
+**The reading:**
+- **The new market size moves α 0.45–0.70 se toward zero,** and α is not significant at 10 % in any variant (p 0.16–0.24).
+- **The logit elasticity falls from −0.246 to −0.16 to −0.19,** and the D dummy from −4.13 to about −3.5 to −3.8.
+- **The design choices move α little:**
+  - L1 against L3: 0.002 (0.05 se);
+  - the frozen factor: −0.003 to −0.004;
+  - cap 0.999: −0.002 to −0.003.
+  - The L1/L3 decomposition was not run (the gap is 0.002); its step exists.
+
+**The frame** (E3, base):
+- 609,322 rows; 19,319 are dropped:
+  - netting where φ̂ ≥ 0.9999 takes the whole gain;
+  - the factor's drift.
+- ACT > 0.80·P in 1.2 % of market-quarters (13.1 % of the stock; 6.4 % under L3); the floor 0.95 in 0.8 %;
+- **the median local inside share is 0.099** (outside 0.90; 0.63 stock-weighted); the D share of the national pool 0.047;
+- truncation 0.428 of cells and 0.337 of the stock;
+- **the logit-side tail** (|Δδ| > 10) in 0.50 % of rows; ext1's needs the RC rerun;
+- W4 at the median: own 0.027, rivals 0.118, new 0.838.
+
+**The caveats:**
+- Type 1 is unsettled until the ESTBAN answer lands.
+- **These numbers move again with the new φ̂ (A1.40).** The driver re-runs on it.
+
+### 11-13 12:48 IMPR: the r^f of ρ by type (your 12:16 question). Every type uses the effective overnight Selic; type 5 on B rows pays the CDI, so its spread is zero by construction
+
+- **r^f is the same for every type: the effective overnight Selic** ("Selic over", SGS 11), compounded daily over the quarter. It is NOT the target.
+  - Code: `panel_deposit_rates.py` l.851–858 (`risk_free_qoq = selic_qoq`; `spread_a{t} = risk_free_qoq − rate_a{t}`); `utils/macro_rates.py` l.77–78.
+  - **The frame confirms it:** 5.138 % annualized in 2019Q4 and 13.189 % in 2023Q2, against targets of 4.50 and 13.75 [V-code, V-data].
+- **r^dep by type:**
+  - type 1: 0;
+  - type 2: the regulated savings rate;
+  - type 4: the bank's CDB rate;
+  - **type 5:** the payment institution's own rate, else the quarter's median of those rates, else **the CDI** (l.831–835); the issuers' posted rules override this where they apply (l.838).
+- **Why the B rows show zero:** they fall back to the CDI, and the Selic over and the CDI differ by about 2e-5 pp (2019Q4: 5.138282 against 5.138261). **So the B-row type-5 spread is zero by construction,** and all of type 5's spread variation comes from the D issuers' posted rules.
+- **For the appendix sentence [inf]:** "where the CDI applies, the type-5 spread is the Selic minus the CDI" is correct, but with r^f the over rate that gap is zero. The ~0.10 pp gap people have in mind is between the target and the CDI. **Suggested wording:** "where no posted rate exists, a payment account is assigned the CDI, which equals the effective Selic up to rounding, so its spread is zero; the type-5 spread varies only across the issuers whose posted rules are observed."
+  - **This also explains request 2:** α never rested on type 5.
+
+### 11-13 12:37 IMPR: your 12:16, 12:24 and 12:27 entries are read
+
+- **12:24, the new sleepiness run:**
+  - **The plan goes to the W2 agent,** because it is one run with the stakes. It covers the Pix state (a) against (b), with a recommendation and the Panel B conditioning check; the identification under (10)'s fixed effects; which specifications and approaches; the gate; the two demand branches; what moves downstream; and the cost.
+  - **No run until Pedro accepts the plan.**
+  - **Corrected:** the plan's claim that τ0 stays at Table 4's value is removed. G, Υ and τ0 are all re-estimated, and the new τ0 is reported beside Table 4's.
+  - **Step 2 is now interim** (the market-size benchmark). E4 finishes; the L1/L3 decomposition is dropped if it is long.
+- **12:16, the r^f of ρ by type:** a quick read-only answer, with code lines, is coming.
+- **12:27, the ξ table (A1.41):** queued for the rerun. Panel C leaves the table; the own-branches keys stay in the sidecar; float at `[htpb]`.
+- **No key will be renamed** without telling you first.
+
+### 11-13 12:27 MAIN: Pedro's go on two more items. The demand-residual table, and the paper's side of the night
+
+Pedro: "ok, send these to the agent." Both items below have his go. Neither runs before the rerun unless you say it is free.
+
+**1. `tab_xi_diagnostics.tex` (`make_xi_diagnostics.py`) shrinks at the rerun (A1.41).** Pedro asked what Appendix C's Demand Residuals still gives. It stays, because Section 6 uses it for the threat that serially correlated demand shocks push the sleepy share up, and Section 7 does not remove that threat. Part of it is superseded by the availability index.
+- **Keep Panels A and B:** the order-free variance split and the persistence slopes. Section 6 quotes `demand.xi.anova.E3.k4.*` and `demand.xi.ar1.E3.k4.within.*`.
+- **Panel C (the outside variables) leaves the table.** The own-branches result is what the index now models through branches and advertising.
+- **But keep the own-branches keys** `demand.xi.corr.E3.k4.own_branches.{slope,ci.lo,ci.hi,r2}`, in the sidecar with no table row, the way you kept the 4G/5G key. Section 6 quotes them, and Pedro decides at the rerun whether that sentence stays.
+- **Timing:** with the rerun, since every number in the table changes then. Diff outline first, then the edit, the regeneration, the md5s, the check that every key the paper quotes is still defined, and the float at `[htpb]` (A1.36).
+- **The paper side** (mine, at the rerun): the appendix keeps one paragraph for Panels A and B, drops the Panel C paragraph (AR12), and cuts AR11 to two sentences.
+
+**2. For your information:** the edits Pedro applies today use the recentred and permutation keys in D35 and in a new appendix paragraph (AB13), and add `borusyak2023nonrandom` to `References.bib` (Econometrica 91(6), 2155 to 2185). If any key name changes, tell me before you rename it.
+
+### 11-13 12:24 MAIN: Pedro's decision, a new sleepiness run with a market-level Pix measure. And the link is re-estimated
+
+**Read:** your 12:16 entry. The recentred and permutation keys go into the paper now (D35 and a new appendix paragraph), with Borusyak and Hull (2023) as the reference.
+
+**1. The decision (A1.40).** Pedro: the national Pix indicator in the sleepiness state vector is a poor measure, and the sleepiness step is run again with a market-level one. This supersedes A1.38: spec 12's $\hat{\phi}$ is re-estimated, and everything downstream follows.
+
+**2. The link (Pedro's point, and a correction to the W2 plan).** In the single-index approaches the index coefficients are identified only together with the link $G$. Adding the stakes, or changing the Pix state, adds or changes an element of the index, so $G$, every element of $\boldsymbol{\Upsilon}$, and $\tau_0$ are all estimated again. The W2 plan's line that quarter-demeaned stakes keep $\tau_0$ at Table 4's value should go. Report $\tau_0$ from the new run beside Table 4's, without assuming they agree. The paper's text is being corrected the same way.
+
+**3. What I ask: a plan, no run.** Smokes locally after Pedro accepts the plan; Bouchet on his go on the commands.
+- **The Pix state.** Two candidates, with the trade-off for each:
+  - (a) **reduced form:** the 2019 exposures times the post-launch indicator, as market-quarter states. Say whether all three enter or one index, and what the mobile-lines state already in $\boldsymbol{S}_{mt}$ does to the 2019 mobile exposure (Panel B's conditioning diagnostics, before the run);
+  - (b) **predicted use:** the first-stage prediction of centred Pix use from the three exposures, as one state. It matches Section 7's instrumented use, but it is a generated regressor inside a nonlinear index, so say how the inference accounts for it (bootstrap of both stages by state?).
+  - Pedro's note asked for (a). Recommend one, with the reason.
+- **How it is identified:** the quarter effects absorb a national state, so today's Pix indicator is identified only through its product with lagged deposits. A market-quarter state is identified across markets within a quarter. Say what the fixed effects of (10) leave for it.
+- **The specifications:** which of the twelve specifications and four approaches are rerun, the gate (the old spec 12 reproduced with the national indicator), and how W2's stakes enter the same run.
+- **The demand branches:** propose what the two branches of A1.39 become (for example the new baseline without the stakes, and the attention version with them). The old spec 12 then serves only as the gate.
+- **What moves downstream:** Table 4 and its keys, the state-vector table, Step 2 (now interim, since its $\hat{\phi}$ will change), the demand rerun, and the keys. And the cost, in hours, locally and on Bouchet.
+
+**4. Order:** the plan before Step 2's E4 decomposition fits if they are long. Step 2 on today's $\hat{\phi}$ stays useful as the benchmark for what the market size alone does.
+
+### 11-13 12:16 MAIN: your 11:38, 11:55, and 11:58 entries are read. A1 updated, and one question on type 5
+
+**A1.37 to A1.39 record Pedro's decisions of 11:40 to 11:50** as you reported them (W2, one sleepiness run, two demand branches).
+
+**Step 2 (11:58):** noted. The logit coefficient moving to about $-0.042$ (p 0.24) under the new market size is the result the paper will have to carry, so no text until E4 and the random-coefficients rerun. The L1 against L3 gap of 0.002 answers my 10:48 question.
+
+**Type 5 (11:38): thank you for the correction.** One question it raises for the paper's data appendix. The live text says that where the CDI rate applies, the type-5 spread is the gap between the Selic and CDI rates. You find the B rows' type-5 spread at 0.000 with no movement over time. So either the spread is built with the CDI as the risk-free rate, or the text is wrong. Please say which rate $r^f$ is in $\rho = r^f - r^{\mathrm{dep}}$ for each type in the frames, so the text can be fixed when the rerun's text is written.
+
+**Pedro has applied every block that could be applied.** Further text waits for Step 2, the rerun, and your documentation of the recentred keys.
+
+### 11-13 12:16 IMPR: the recentred stakes keys and the permutation keys are in (A1.34)
+
+**`make_paper_numbers.py`** went from `b058f741` to **`6ee7dc5c`**: 431 → **433 entries**, **0 MISMATCH**. No other entry changed; last night's four state keys are intact, and the 99 draws are byte-identical.
+- **The producer:** the computation now sits in the P3 producer (`diag_p_shifters.py` `3f6bb98d`, `diag_p3_numbers.py` `31d7501b`), so the values are recomputed on every run.
+- **The macros** are `40d4834c` in Drafts. The note is `scratchpad\stakes_rc_1113\stakes_rc_1113.md`.
+- **`pix.stakes.fs.perm.*`** (the raw slope against 99 permuted slopes):
+  - slope 0.236, median 0.109, max 0.215, n_ge 0, **p 0.010**;
+  - net of structure: slope 0.179, max 0.161, p 0.010.
+- **`pix.stakes.fs.rc.*`** (the recentred instrument):
+  - slope 0.108, se_ri 0.039, t_ri 2.751, **f_ri 7.569, p_ri 0.020**;
+  - f with MCA clusters 273.589, **f_state 17.661**;
+  - corr_z_mu 0.685;
+  - and the `_net` versions alike.
+- **These keys are stored unrounded** (the agent's choice; the older `fs.f*` are whole numbers). For example, `\pn[1]{pix.stakes.fs.rc.f_ri}` prints 7.6.
+- **`make_paper_numbers.py` is released.** Next to use it: `sleep.attn.*`, after W2's run.
+
+### 11-13 11:58 IMPR: Step 2, E3 interim. Under the new market size the logit α moves toward zero and is not significant; L1 and L3 barely differ
+
+**This is the spec-12 branch** (the current φ̂, which stands; see the entry of 11:52). Driver `diagnostics/diag_step2_reshare.py`. E4 and the decomposition fits are running [V-data].
+- **The gates:**
+  - gate S passes: the source frame through the new writer reproduces α −0.064410 and D −4.1255;
+  - **G_t > 0 in every quarter of every variant** (minimum 0.385 under L1, 0.332 under L3). Under P^B, G_t is the national outside share, so the D rule needs no change.
+
+| E3, full_dtype, WCB | cap 0.99, factor time-varying | cap 0.99, factor frozen | cap 0.999, time-varying | cap 0.999, frozen |
+|---|---|---|---|---|
+| **L1 (base)** | **−0.0422 (0.0317), p 0.236**; D −3.529 | −0.0452 (0.0314), p 0.203; D −3.683 | −0.0451 (0.0318), p 0.209 | −0.0481 (0.0314), p 0.180 |
+| L3 | −0.0438 (0.0319), p 0.222; D −3.670 | −0.0470 (0.0315), p 0.190; D −3.828 | −0.0471 (0.0319), p 0.194 | −0.0502 (0.0316), p 0.167 |
+
+- **α moves 0.45–0.7 se toward zero** from production's −0.064 (p 0.091), and is not significant at 10 % in any variant.
+- **The differences between versions are small:**
+  - **L1 against L3: 0.0016–0.0020 (0.05–0.06 se).** Pedro's rule choice barely matters for α, and the decomposition you asked for at 10:48 explains a gap of about 0.002;
+  - freezing the factor makes α about 0.003 more negative, and so does cap 0.999.
+- **The type-5 variant** (spread zeroed, no dummy) gives −0.0423, unchanged.
+- **The frame (E3, L1, cap 0.99, time-varying):**
+  - 609,322 rows; 19,319 are dropped because their active balance is zero after netting or the factor's drift (8,181 with the factor frozen);
+  - ACT > 0.80·P in 1.2 % of market-quarters (13.1 % of the stock), and the 0.95 floor in 0.8 %;
+  - **the median local inside share is 0.10** (outside 0.90; 0.63 stock-weighted);
+  - the D share of the national pool: median 0.047;
+  - truncation: 0.428 of cells and 0.338 of the stock;
+  - **the logit-side tail,** |δ_new − δ_old| > 10, in 0.50 % of rows;
+  - W4 at the median: own 0.027, rivals 0.118, new money 0.838 (carry-weighted 0.632).
+- **The type-1 results are flagged unsettled:** the ESTBAN demand gap investigation is still running.
+- **For the text, not yet a key:** the new market size takes the logit price coefficient from −0.064 (p 0.09) to about −0.042 (p 0.24) [inf]. The RC side (ext1) needs the rerun.
+
+### 11-13 11:55 IMPR: Pedro's decisions of 11:40 to 11:50 on φ and W2; the state-vector table now floats
+
+**Pedro, to IMPR** (A1 is yours to update):
+1. **W2 is accepted: the plan's nine recommendations, as updated.**
+   - τ1 within a market over time; the form fixed by a rule before τ1 is seen (levels if the state-cluster F ≥ 23.1, otherwise logs); quarter-demeaned stakes, so τ0 stays Table 4's; markets with at least two B banks, with a matched baseline;
+   - a 99-draw joint permutation placebo; the reduced-form test of τ1 = 0 as the lead inference; the first-stage F by state; keys `sleep.attn.*`;
+   - **the RECENTRED cost-shifter dispersion as the instrument** (A1.34).
+   - **The order:** smokes locally, then the full run on Bouchet once Pedro gives the go on the commands.
+2. **One sleepiness run, with W2 in it.**
+   - **Spec 12's φ̂ needs no re-estimation.** Pedro's "panel fix" meant yesterday's two bugs. Both are in the demand prep, downstream of the sleepiness step, and the fix agent verified that `sleep.*` and `est{k}/national_phi_t.csv` do not move.
+   - **No panel rebuild is needed:** the panel fa38794d was built on 11-05, and est1–4 come from I2 on that panel (11-07).
+3. **The demand side runs with BOTH φ:**
+   - spec 12's, from est1–4, unchanged;
+   - the attention φ, from W2.
+   - **So the rerun has two demand branches** (prep, logit, BLP), selected by a φ-source switch in the prep. The W2 driver writes the attention φ in the format the prep reads; the switch's diff outline comes with W2's report, and the edit goes into the rerun.
+
+**The W2 driver started at 11:51.** It is a new standalone file that edits no production file; gate G-W2-0 reproduces production with the stakes off. Its smokes wait for Step 2's logits to finish, since only one heavy process runs at a time.
+
+**`tab_state_vector_map.tex` is now a `table[htpb]` float** (in Drafts, `830e21ce`; generator `5eba0346`).
+- The tabular block is byte-identical, so the cross-checks are unchanged.
+- It floats whole on one page in a harness that mirrors the preamble, with no overfull boxes.
+- In V_Friction it may move to the top of the next page; that is the `[htpb]` default.
+- **The `paper-tables` skill** still tells generators to use `_wrap(..., nobreak=True)`. It gets updated once the placement policy is settled.
+
+### 11-13 11:38 IMPR: request 2 (type 5 and the price coefficient). Taking type 5 out changes nothing, and the premise needs a correction
+
+**The files:** `diagnostics/diag_w1_followups.py --step t5` (LF `b9990d77`); `Rout/diag_w1_followups/w1_type5.json`; the note `scratchpad\w1_followups_1113	ype5_alpha_1113.md`. The gate passes: production α and ext1 ᾱ are reproduced [V-data].
+
+- **The correction:** on B rows (62,080 type-5 rows) the type-5 spread is **0.000 pp, sd 0.0001, constant over time.** It does not move with Selic minus CDI.
+  - Only the 961 D rows vary (mean +0.64 pp, sd 2.67), and 99.2 % of that is within the quarter: the issuers' posted rules.
+  - So the positive type-5 coefficient is a correlation across D issuers, not over time [inf].
+- **Version (b), the type-5 spread kept out of the price term,** leaves everything unchanged:
+  - logit α −0.064 (p 0.089), elasticity −0.245 [E4 −0.064, −0.244];
+  - ext1 ᾱ −0.216, elasticity −0.826 [E4 −0.227, −0.869].
+  - No extra dummy is needed: `fgc_covered` is exactly 0 on type 5 and 1 elsewhere, so it already carries type 5's level. A separate dummy would add a constant outside the no-constant design.
+- **Version (a), type 5's own coefficient:**
+  - instrumented, it is not identified (effective F 2.230);
+  - exogenous, it is +0.574 in the logit and +0.097 in ext1 (p 0.18).
+  - On D rows alone the slope is +0.236 in the logit and −0.254 in ext1: the random coefficients flip it.
+- **Last night's tail result is unchanged under (b):** ᾱ −0.042 / −0.034 without the tail rows.
+- **`make_demand_type5_variants.py`** only builds sample variants (`no5`, `d5only`, dropping rows); none keeps type 5 with its spread out of α.
+  - **Its logit keys `demand.t5.no5.E{3,4}` and `demand.t5.d5only.E{3,4}` are stale:** they come from 10-21, on 631,801-row frames, before production I2. They refresh in the rerun.
+- **For Step 2:** version (b) without a dummy is the clean variant, and it is passed to the Step 2 agent.
+
+### 11-13 11:29 MAIN: a correction to my request 2 of 10:27 (type 5), and notes on your 11:12 and 11:16 entries
+
+**Read:** 11:12 and 11:16. The 4G/5G key is used in the paper's clause near %E15 (Pedro's edits file, block T2). The table's leftovers are noted as done.
+
+**A correction.** My request 2 said that the paper's appendix makes the type-5 spread the gap between the Selic and the CDI, common to every institution in a quarter. That was the old paragraph, which Pedro has commented out. The live text uses the rates that issuers post: a zero rate for the issuers whose terms state or imply one, a percentage of the CDI where posted, and the CDI only where no rule applies (keys `type5.rules.*`). So the type-5 spread does vary across issuers within a quarter.
+- **Request 2 stands,** with a better reason: how much of the price coefficient's positive type-5 sign is cross-issuer variation, and how much is the CDI fallback, which is common within the quarter. Please split the type-5 rows that way in the variant.
+- **And check one thing beside it:** your 23:10 flag says prepaid balances accrue the CDI in (11-B) through the fallback of `panel_deposit_rates`. If the spread uses the posted rule and the accrual uses the CDI for the same issuer, the two are inconsistent. Say which rate each uses.
+
+**For your information:** Pedro drops Table 5 (`tab:friction_frame`). The text of Section 7 now carries the two questions. Tables after it renumber when he applies it, so rerun `make_paper_equations.py` after his next compile, as already planned.
+
+### 11-13 11:16 IMPR: A1.33 is done. The table's two leftovers are fixed, and the 4G/5G key is back for the %E15 clause
+
+- **`sleep.ssel.absorbed.g4g5` = 0.976 is back** (sidecar-only, no table row; the cross-check skips it as "not printed").
+  - **For the clause:** `\pn[p0]{sleep.ssel.absorbed.g4g5}` prints 98, `\pn[p1]` prints 97.6, and `\pn` prints 0.976.
+- **`make_paper_numbers.py`** went from `dd9ebe62` to **`b058f741`**: 430 → **431 entries**, ok 352, **0 MISMATCH**.
+  - Only the key was added; no other key changed.
+  - Every `\pn` key quoted by V_Friction (181), V_Full and the decks is defined.
+  - The macros (`00232f68`) are in Drafts.
+- **`tab_state_vector_map.tex`** (`84b66a70`, in Drafts) now has the header "Law of motion", and the lone subheading is gone. Nothing else differs; it compiles on one page with no overfull box.
+  - The generator is `make_state_vector_table.py` `4dfd8024` (CRLF).
+- **Next on this table:** the float at `[htpb]` (11:03), done by the same agent; IMPR reports it when it lands.
+- **`make_paper_numbers.py` is now handed to the stakes agent** for the recentred keys (A1.34).
+
+### 11-13 11:12 IMPR: your 10:48, 11:02 and 11:03 entries are read
+
+- **10:48:** the L1-against-L3 decomposition of the price coefficient (how much comes from the market-quarters above 0.80 of the pool) is passed to Step 2's report.
+- **11:03, the tables: started now with one agent** (A4 item 4b).
+  - Diff outline first, then the regenerations, md5s, and compiles to scratch with no overfull box.
+  - If decimal alignment needs a preamble package, the one line is proposed for Pedro.
+  - It also says how `make_paper_equations.py` finds the .aux, so Pedro knows what to rerun after his next compile.
+- **11:02, LAI 025440:** queued after Step 2 and the five requests, as you ordered (A4 item 4c).
+
+### 11-13 11:03 MAIN: a quick task from Pedro on two tables. Light, it can run beside Step 2
+
+Both are generator edits, so they are yours: the generated `.tex` files say "Do not edit" and a direct edit would be lost at the next regeneration. Pedro's go is given. Diff outline first, as always, then the edit, the regeneration, the LF md5s, and a compile check.
+
+**1. `tab_pix_exposure_fs.tex` (`make_pix_exposure.py`): the intervals must not wrap.** Today each of the six numeric columns is `p{1.65cm}`, so intervals such as [$-232.749$, $145.237$] break over two lines in their cell.
+- Widen the three slope columns and narrow the three $F$ columns so that every interval sits on one line at `\footnotesize`. The label column (`X`) takes what is left.
+- If the Value columns still do not fit, print them with one decimal (they are reais per inhabitant). Say if you do.
+- Panel A uses the same columns, so check that it still reads well.
+- **Panel A, added by Pedro at 11:03:**
+  - **Align the columns.** Today the headers are centred while the numbers are right-aligned in `p` columns, and Panel A leaves the seventh column empty. Align the numbers of each column on the decimal point, with each header centred over its own column. The paper's preamble loads neither `siunitx` nor `dcolumn`, so first try right-aligned columns with the same number of decimals in each, which aligns the points without a new package. If that is not enough, propose the one preamble line for Pedro to add, since he edits the paper.
+  - **The diagonal of the correlation block prints a dash (`--`),** not $1.000$. A variable's correlation with itself carries no information.
+- **The check:** compile the table alone and in the paper, no overfull box, and no cell on two lines.
+
+**2. Every table at `[htpb]` (Pedro's default).** What I found by reading the files:
+
+| Table | How it is placed now | What to do |
+|---|---|---|
+| `cluster_imbalance_panelB.tex` | `table[H]` | Change to `[htpb]`. It has no generator tag, so find its generator first |
+| `Compressed_MarketStructure_by_Year_AB.tex` | `table[htbp]` | Same placement as `[htpb]`. Write `[htpb]` for consistency |
+| `tab_dep_anova.tex`, `tab_state_vector_map.tex`, `tab_xi_diagnostics.tex`, `tab_pix_exposure_fs.tex` | `minipage` with `\captionof`: not a float, so it sits where it is input | Make each a `table[htpb]` float, if it fits on one page |
+| The `xltabular` and `longtable` files (the estimation tables, the appendix masters, the summaries) | Multi-page tables cannot float | Leave them. List any that fit on one page today; those could become floats, on Pedro's word |
+| The tables whose `table` environment is in `V_Friction.tex` | Already `[htpb]` | Nothing. Pedro edits those |
+
+- **Check after the change:** the paper compiles, every table keeps its number and label, and no reference breaks. Then rerun `make_paper_equations.py`.
+- **Figures (Pedro, 11:06: "figures as well").** No generated file holds a figure: every figure environment is in `V_Friction.tex`, and the one at `[H]` (the market-structure figure of Section 2) is in Pedro's edits file. Nothing for you on figures.
+- `make_paper_numbers.py` is not touched by either task.
+
+### 11-13 11:02 MAIN: LAI 025440 is answered. Two low-priority tasks: archive it, and check the panel's time-deposit rate against it
+
+**The answer.** Pedro received it this morning, 11-13 (Fala.BR status "Acesso Parcialmente Concedido"). The workbook is `C:\Users\pedro\Downloads\Captações resgates taxas segmento.xlsx` (1,173,676 bytes, md5 `ecb89db5ec9e340a29bf5e2442ddb79b`). **Pedro decided not to appeal.**
+
+**What the workbook is** (read by the main thread, read-only):
+- **Source:** the BCB's Document 5005 (the institutions' daily CDB, RDB, and notice-deposit report), not the B3/Cetip registry. Its filling instructions are at `https://www.bcb.gov.br/content/estabilidadefinanceira/Leiaute_de_documentos/cdb/instrucoes-de-preenchimento-doc5005.pdf`.
+- **Sheet `Dados`:** 8,087 rows, one per business day and prudential segment, 2017-06-01 to 2023-12-29 (S5 from 2018-02). Columns `DATA`, `SEG`, then issues (`CAP_`), redemptions (`RESG_`), and the issuance-weighted mean rate (`TX_`, percent a year) for each indexation: `PRE` (fixed), `POS` (TR or TBF), `CDI`, `OUTRAS` (other floating, such as price indices). No missing values.
+- **Sheet `Notas`:** only authorized institutions active on each date. Segment unavailable before 2017-06. The rate follows the instructions of Document 5005.
+- **Missing against the request:** institution (refused, LC 105 and LAI art. 22), investor location, number of operations, the stock, and 2024. ESTBAN item 907 was filed by institution only, without branches, until the unification of documents 4500 and 4510 in 2025-01, so it has no municipal series for 2016 to 2024.
+
+**What I checked** (for your information, nothing to rerun):
+- Quarterly net issuance tracks the change in the registry stock of 025399 with correlation 0.94 (S1), 0.89 (S2), 0.69 (S3), and 0.49 (S4). S5 is nearly empty before 2024.
+- Quarterly redemptions are about 1.9 times the S1 stock, because about 90 percent of it is daily-liquidity CDBs. Gross flows are cash management, not choices.
+- The CDI-indexed issuance rate as a share of the Selic (SGS 4189, monthly medians): S1 61 to 64 percent in 2017 to 2021 and 70 to 82 in 2022 to 2023, S4 about 100.
+
+**Task 1, low priority: archive it** as you archived 025399, in `DATA_RAW/BCB/registry_025440/`.
+- `raw/`: the workbook as delivered, with md5 and sha256, and a check against the Downloads copy.
+- `docs/`: the Document 5005 instructions PDF. **This download has Pedro's go** (one public file from bcb.gov.br).
+- `NOTES.md`: the request, the answer verbatim (below), the summary above, and "not appealed (Pedro, 11-13)".
+- `source_log_rows.csv`, then the master log, `DATA_RAW/README.md`, and a path in `utils/raw_paths.py` if a script will read it.
+
+**Task 2, low priority, read-only: the rate check.** The first check of the panel's time-deposit rate that does not use COSIF.
+- By prudential segment and quarter, 2017Q3 to 2023Q4: the panel's type-4 rate (deposit-weighted over conglomerates, with your segment map of 025399) against the Document 5005 CDI-indexed issuance rate (issuance-weighted over the quarter's days). Use the CDI-indexed series. Report the fixed-rate series beside it.
+- **Report:** the level gap and its path, whether the ordering across segments matches, and the correlation over time within each segment.
+- **Caveats to state with it:** the BCB rate is on new issuance, weighted toward the churning daily-liquidity CDBs, while the panel's rate is on the stock. The levels should therefore differ. The ordering and the co-movement are the test.
+- No keys. If the paper ends up quoting it, keys on Pedro's go.
+
+**Order:** both after Step 2 and the five requests of 10:27.
+
+**The answer, verbatim** (for `NOTES.md`; pasted by Pedro on 11-13):
+
+> Acesso Parcialmente Concedido
+>
+> Parte da informação está protegida por sigilo bancário (Lei Complementar nº 105/2001)
+>
+> Prezado Senhor, Em atenção ao pedido de acesso à informação, informamos que, após análise técnica e jurídica da solicitação, o Banco Central do Brasil fornecerá, nos limites das informações disponíveis e passíveis de divulgação, dados referentes aos depósitos a prazo (CDB e RDB) solicitados. Esclarecemos, inicialmente, que os dados a serem disponibilizados não serão extraídos da base de registros da B3/Cetip mencionada no pedido. Para o atendimento da demanda, serão utilizadas, preferencialmente, informações prestadas diretamente ao Banco Central pelas instituições financeiras supervisionadas, por constituírem fonte mais adequada, consistente e confiável para a apuração das variáveis solicitadas. A utilização de fonte distinta decorre das limitações operacionais e metodológicas existentes nos registros provenientes das entidades registradoras, entre as quais se destacam a cobertura não integral das operações, a elevada volumetria dos dados, as diferentes estruturas de remuneração dos instrumentos e as limitações para identificação e localização dos investidores. Quanto ao nível de detalhamento das informações, os dados relativos às taxas de remuneração e aos volumes captados não serão disponibilizados de forma individualizada por instituição financeira. Essas informações estão relacionadas às operações passivas das instituições e podem revelar aspectos de suas estratégias de captação e de precificação, encontrando-se sujeitas às restrições decorrentes do regime jurídico de sigilo aplicável, nos termos da Lei Complementar nº 105, de 10 de janeiro de 2001, e do art. 22 da Lei nº 12.527, de 18 de novembro de 2011. Dessa forma, buscando conciliar o direito de acesso à informação com a necessária proteção das informações legalmente tuteladas, os dados passíveis de fornecimento são apresentados de forma consolidada por segmento prudencial, nos termos da regulamentação aplicável, sem identificação individual das instituições financeiras. A utilização dessa forma de agregação permite disponibilizar informações relevantes para a finalidade estatística indicada no pedido, preservando, ao mesmo tempo, o sigilo das operações e informações de natureza comercial e concorrencialmente sensíveis. Ressaltamos, ainda, que as bases utilizadas não permitem, para o período e com a abrangência solicitados, identificar de maneira adequada a localização geográfica dos investidores. Da mesma forma, determinadas variáveis originalmente requeridas, como o número de operações, não se encontram disponíveis na fonte alternativa utilizada para atendimento da demanda. Com relação ao item 3 (Do Documento 4500 (ESTBAN), o verbete 907 (depósitos a prazo fixo, CDB e RDB, captação de recursos), por instituição (CNPJ e nome), por município e por mês, de janeiro de 2016 a dezembro de 2024. Esse verbete consta do modelo do documento, mas não do arquivo público do ESTBAN.), esclarecemos que, anteriormente à unificação dos documentos 4500 e 4510, as informações relativas ao referido verbete eram prestadas apenas por instituição (CNPJ), sem identificação das respectivas agências, o que impossibilita sua desagregação por município. Considerando que a unificação dos documentos ocorreu somente em janeiro de 2025, não é possível fornecer as informações com o detalhamento geográfico solicitado para o período indicado. No caso de negativa de acesso à informação ou do não fornecimento das razões da negativa do acesso, o(a) requerente poderá registrar recurso contra a decisão no prazo de dez dias, conforme o artigo 15, parágrafo único, da Lei 12.527, de 2011. Atenciosamente, Banco Central do Brasil Departamento de Atendimento Institucional Tel: 145 [www.bcb.gov.br/acessoinformacao/faleconosco](https://www.bcb.gov.br/acessoinformacao/faleconosco)
+
+### 11-13 10:48 MAIN: your 10:35 and 10:41 entries are read. What they change in the text
+
+**Read.** Thank you for the split of the pool. No new request.
+
+**What it changes on my side:**
+- **The draft of Section 4 (on hold until the rerun)** now defines new money as net, so it can be negative, and says that money leaving the market comes out of the awake pool. It also says that the pool moves with the sleepy share.
+- **Section 5, when I write it after Step 2,** will carry your caution: about four fifths of the pool is carried wealth that did not stay, so the market size rests on $\hat{\phi}$ and the truncation, and an error in $\hat{\phi}$ moves both the active balances and the pool.
+- **Both notes** carry the component table and the stock-weighted exceptions.
+
+**One point for Step 2's report, already in its scope.** Under L1 with netting, 13 percent of the stock sits in market-quarters above 0.80 of the pool (9 percent above 0.95), against 6 percent under L3. Pedro chose L1 as the base. If the price coefficient differs between L1 and L3, please say how much of the difference comes from those market-quarters. That is what he will decide on.
+
+### 11-13 10:41 IMPR: your requests 3 and 4. The pool is carried by the awake part of carried wealth, not by new money
+
+**The basis:** the decided set (credit unions outside, the factor on comparable institutions, the main pool P^B), from `Rout/diag_new_money`, read-only. The tables are in `scratchpad\newmoney_1112\req34.txt` [V-data]. IMPR checked that the components add up exactly.
+
+**Request 3: L1 with symmetric netting, stock-weighted.** The share of the lagged booked B stock in market-quarters with ACT > 0.80·P:
+- **E3 0.131** at cap 0.99 (0.132 uncapped and at 0.999); **E4 0.128**;
+- without netting: 0.201 / 0.185;
+- by count: 0.012 / 0.011;
+- above 0.95·P, stock-weighted: 0.090 / 0.073;
+- L3 with netting, stock-weighted, above 0.80·P: 0.064 / 0.047;
+- the truncation share beside it: 0.428 of B cells and 0.337 of the stock (E3); 0.422 / 0.295 (E4).
+
+**Request 4: P^B by component** (pooled 2016–2024, sums of quarterly levels, E3, φ̂ uncapped):
+
+| component | R$ billion | share of P^B | E4 share |
+|---|---|---|---|
+| new money N | 2,342 | **0.194** | 0.177 |
+| money that left the truncated inside cells, Σmax{0, φ̂C − D} | 2,247 | 0.187 | 0.156 |
+| the rest of the inside awake money, Σ(1 − φ̂)C | 1,868 | 0.155 | 0.189 |
+| the outside part's awake money | 5,590 | **0.464** | 0.478 |
+| of which (1 − φ_t)C^∅ | 3,406 | 0.283 | 0.331 |
+| of which its excess outflow, Σmax{0, φ_t C^∅ − D^∅} | 2,184 | 0.181 | 0.147 |
+| total P^B | 12,047 | 1 | |
+
+- **New money's share by year:** −0.133 (2016), −0.132 (2017), 0.169, 0.165, **0.592 (2020)**, **0.513 (2021)**, 0.088, 0.010, 0.209 (2024).
+- **The largest single component by quarter:**
+  - the outside carry's awake money in 22 of 36 quarters (its (1 − φ)C^∅ part alone in 14);
+  - new money in 12;
+  - the inside truncated outflow in 2.
+- **The same pool split as active balances:** inside 0.468, outside 0.532.
+- **For the paper [inf]:** the pool is carried by the awake part of carried wealth, inside and outside (about 0.8), not by new money. New money matters only in 2020–21, the emergency-aid years, and is negative in 2016–17.
+- **A caution for the text:** the pool's size rests mostly on (1 − φ̂) and on the truncation's outflow. So the sleepy share and the truncation, not the new-money measurement, drive the market size.
+
+**Step 2 started at 10:40.**
+
+### 11-13 10:35 IMPR: your 10:27 entry is read; Step 2 and the five requests are running (see A4)
+
+- **Started at 10:33:**
+  - Step 2, with your requests 3 and 4 first;
+  - request 1 (ESTBAN demand against IF.Data), with a new agent;
+  - request 2 (type 5 out of the price coefficient), on today's frames now and again in Step 2;
+  - the table leftovers plus the 4G/5G key.
+- **Queued:**
+  - the recentred stakes keys (A1.34), after the table agent releases `make_paper_numbers.py`, so that only one agent edits it at a time;
+  - the rerun edits (A1.31, A1.32);
+  - the realized-awake keys after the rerun (request 5).
+- **Type 1 in Step 2 is flagged "unsettled"** until request 1 answers.
+- **The ext1 tail under the new shares** needs the RC rerun. Step 2 gives the logit-side analogue.
+
+### 11-13 10:27 MAIN: Pedro's decisions on the night's results, the go for Step 2, and five requests
+
+**Your entries of 22:18 to 23:52 are read in full.** Pedro has the digest and has decided. A1.26 to A1.34 record it.
+
+**A correction on my side.** At 21:54 I expected the money of funds to sit in a few headquarters cells and the factor to be about two thirds. Your diagnostic shows otherwise. Half of the gap was judicial deposits that production already nets out, credit unions make the panel smaller than the aggregates, and the rest has no cell of its own. The uniform factor is right.
+
+**Pedro's decisions:**
+1. **Credit unions:** in the outside good.
+2. **The universe method:** the uniform factor by type and quarter, on the comparable institutions. The registry's factor by segment as a sensitivity.
+3. **The allocation rule:** L1 (population times access) as the base, because it does not use the outcome. L3 beside it.
+4. **Booking moves:** symmetric netting.
+5. **Step 2: go.** The re-share and the local logit under 1 to 4, at both caps, for L1 and L3, with the factor frozen at its sample mean beside the time-varying one.
+6. **The fee plan:** all seven as you recommend. He chose the missing fee above R\$ 50 over the cap he had accepted on 11-12.
+7. **(a):** dropped as a benchmark. **The two row-based channels in the prep** (the access median and the national ratio): fixed in the rerun.
+8. **The table's two leftovers:** fix both. The header becomes "Law of motion" and the lone subheading goes.
+9. **The stakes:** the recentred instrument with weak-instrument-robust inference for W2. Keys for the recentred numbers and for the permutation result are a go, diff outline first.
+
+**Five requests, read-only, in this order:**
+1. **Why ESTBAN's demand deposits are 0.67 to 0.76 of IF.Data's for the same institutions.** Checking carries the price coefficient, so this comes before Step 2's numbers are trusted for type 1. If it is not settled when Step 2 ends, say so beside the results.
+2. **Type 5 and the price coefficient.** The paper's appendix says the type-5 spread is the gap between the Selic and the CDI, common to every institution in a quarter. Its positive coefficient is then a correlation over time and not a response to a price. Please give the logit and ext1's linear step with the type-5 spread kept out of the price coefficient, and say whether `make_demand_type5_variants.py` already does this. Include it in Step 2's logit as a variant.
+3. **L1 with symmetric netting, stock-weighted:** the share of the stock in market-quarters above 0.80 of the pool. Your table gives it only without netting (0.219).
+4. **The main pool by component, by year:** new money, the money that left the truncated inside cells, the rest of the inside awake money, and the outside assets' own active balance. New money is small (0.7 percent of wealth a quarter, negative in 11 quarters), so the paper has to say which part carries the pool.
+5. **The realized awake share as keys, after the rerun,** not before. Pedro noted that it will be re-estimated. A name such as `sleep.awake.realized.*` (pooled, by type, and the carry-weighted sleepy share beside it).
+
+**For the headline elasticities.** Your 23:36 result (ext1's coefficient rests on 2.2 percent of rows) is noted for Section 6. No text changes until Step 2 shows what the new market size does to it. In Step 2's report, give the same tail count under the new shares.
+
+**The paper.** I am rebuilding the edits file now: the table's paragraph, the clause near %E15 you found, the fee sentence, and the attention paragraphs rewritten for your 22:54 and 23:30 results. The sentence Pedro had typed (the cost shifters carry the rest) does not hold under state clusters.
+
+**Housekeeping.** Pedro has the two `Remove-Item` lines (the smoke folder and `msize_a_1112`). The two process notes are read.
+
+### 11-12 23:52 IMPR: Pedro's decision: the 4G/5G share keeps a stated reason. Its key comes back (a to-do for tomorrow)
+
+**Pedro (23:50):** "we should add it back then."
+- The 4G/5G row stays out of the table.
+- The key `sleep.ssel.absorbed.g4g5` (0.976: the share of its variance absorbed by the fixed effects) is restored, so that the text can give the reason for leaving it out.
+
+**The plan.** It is not started tonight: the PC goes off, and no code is to be left half-edited.
+1. **`make_state_vector_table.py`:** write the absorbed share of `frac_4g5g` into the sidecar's `absorbed_alone`, as a sidecar-only state with no table row, and list it under a `not_in_table` field.
+2. **`make_paper_numbers.py`:** `SSEL_STATES` still lists `frac_4g5g`, so the key is rebuilt from the sidecar. The table cross-check by row label skips states in `not_in_table`; without that, it would report a MISMATCH.
+3. **The check:** regenerate the table, which must be byte-identical; rerun `make_paper_numbers.py`, which must give 431 entries, 0 MISMATCH, and `sleep.ssel.absorbed.g4g5` = 0.976. Report md5s and the CR count (both files are CRLF).
+4. **A SEARCH/REPLACE clause for Pedro,** for Section 5 near `%E15`. Something like: "the 4G/5G share is left out because the fixed effects absorb \pn[p0]{sleep.ssel.absorbed.g4g5} percent of its variance."
+   - The diff outline comes first, as always. Pedro's go is this decision.
 
 ### 11-12 23:43 IMPR: the state-vector table is in the paper folder (A1.25). Pedro can apply T1
 

@@ -53,6 +53,7 @@ from utils import paths
 from utils import load_panel_cached
 from utils import state_transform as _st
 from utils import demand_chars   # corrected characteristics, segments and balances (always applied)
+from utils import pix_state as _pix_state  # the Pix state of the sleepiness index (SLEEP_PIX_STATE)
 from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 from utils import calendar_lags  # lags by calendar quarter (a missing quarter gives no lag)
 from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR, assert_one_quarter_set
@@ -241,6 +242,8 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     if 'year' in df.columns:
         df['post_2020'] = (df['year'] >= 2020).astype(int)
         df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
+        # The Pix state of the sleepiness index (utils/pix_state.py); nothing under the default.
+        df = _pix_state.add_columns(df, where="sleep_demand_prep_e1")
 
     # D-type dummy: the complement of the authoritative firm-type column.
     df['dummy_D_type'] = (~_resolve_is_B(df)).astype(float)

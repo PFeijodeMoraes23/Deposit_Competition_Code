@@ -22,8 +22,8 @@ mean/median/max obs per cluster, and the deposit HHI with its numbers-equivalent
 cumulative share and each cluster's observation share.
 
 Outputs (CSV + LaTeX; Drafts/Deposit Competition locally, ESTIMATION_OUTPUT/Rout on the cluster):
-    cluster_imbalance_panelA.tex  (\\input-able standalone table [H]: cluster structure / WCB justification; \\label{tab:cluster_imbalance})
-    cluster_imbalance_panelB.tex  (\\input-able standalone table [H], spans \\textwidth: deposit concentration, top-N, for V_Main.tex; \\label{tab:deposit_concentration})
+    cluster_imbalance_panelA.tex  (\\input-able standalone table [htpb]: cluster structure / WCB justification; \\label{tab:cluster_imbalance})
+    cluster_imbalance_panelB.tex  (\\input-able standalone table [htpb], spans \\textwidth: deposit concentration, top-N, for V_Main.tex; \\label{tab:deposit_concentration})
     cluster_imbalance.csv
     cluster_imbalance.json  (the underlying numbers)
 Panels A and B are separate, self-contained tables (no cross-\\ref) so Panel B can be
@@ -194,8 +194,8 @@ def build_stats(df, top_n=5):
 def _table_open(caption, label, full_width=False):
     """Standalone table preamble.
 
-    Placement is [H] (exact position, `float` package) rather than [htbp]: these panels are
-    referenced inline in the text and must not drift to the top of another page.
+    Placement is [htpb], the paper's default for tables: a panel stays where it is input when it
+    fits there and floats to the top or the bottom of a page when it does not.
 
     full_width=True opens a threeparttable spanning \\textwidth, so the table fills the column
     instead of sitting as a narrow block. The tabular itself must then be a tabular* with
@@ -203,7 +203,7 @@ def _table_open(caption, label, full_width=False):
     rather than rescaling the type, which a \\resizebox would do.
     """
     width = r"\begin{threeparttable}[b]" if not full_width else r"\begin{threeparttable}"
-    return [r"\begin{table}[H]", r"\setstretch{1.0}", r"\centering",
+    return [r"\begin{table}[htpb]", r"\setstretch{1.0}", r"\centering",
             r"\caption{" + caption + r"}", r"\label{" + label + r"}",
             r"\footnotesize", width]
 

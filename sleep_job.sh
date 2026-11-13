@@ -125,6 +125,7 @@ cl_banner "Sleepiness stage | step=${SLEEP_STEP}${SLEEP_GATE:+ (${SLEEP_GATE})}"
           "OPEN_FINANCE_ROOT = ${OPEN_FINANCE_ROOT}" \
           "SLEEP_OUT_ROOT    = ${SLEEP_OUT_ROOT}" \
           "DEMAND_PREP_DIR   = ${DEMAND_PREP_DIR}" \
+          "SLEEP_PIX_STATE   = ${SLEEP_PIX_STATE:-national}" \
           "cpus=${SLURM_CPUS_PER_TASK:-8} node=$(hostname) | $(date)"
 
 run_py () { local s="$1"; shift; echo "+ ${PYBIN} ${s} $*"; "${PYBIN}" "${CL_ROOT}/${s}" "$@"; }
@@ -295,7 +296,9 @@ PHI_COL = "phi_t_IV_RivalSpread_x_Tech"
 
 # Columns the RC-BLP engine and every CF read out of the demand parquet. A parquet
 # that is missing one of them fails ~14 h downstream, inside Julia, as a KeyError.
-DEMAND_COLS = ["phi_mt", "pix_exists", "entity_id", "time_id", "spread_ann",
+# The Pix column follows SLEEP_PIX_STATE (utils/pix_state.py): pix_exists by default, pix_use under use_cf.
+from utils.pix_state import main_col as _pix_main_col
+DEMAND_COLS = ["phi_mt", _pix_main_col(), "entity_id", "time_id", "spread_ann",
                "share_D", "share_B_cond", "is_B", "deposit_type",
                "CodConglomeradoPrudencial", "mca_code"]
 

@@ -57,6 +57,7 @@ from utils import state_transform as _st
 from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 from utils import calendar_lags  # lags by calendar quarter (a missing quarter gives no lag)
 from utils import demand_chars   # corrected characteristics, segments and balances (as the demand preps)
+from utils import pix_state as _pix_state  # the Pix state of the index (SLEEP_PIX_STATE)
 DATA_DIR = _paths_mod.PROCESSED
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 PANEL_CSV = _paths_mod.market_panel_csv()
@@ -164,7 +165,10 @@ def add_time_variables(df):
 
 def define_specifications(time_block=False):
     s_base = ['constant']
-    s_macro = ['constant', 'pix_exists', 'cadunico_families_per1000', 'fraction_65plus', 'risk_free_qoq_lag']
+    # The Pix columns come from utils/pix_state.py: pix_exists by default, or Pix use and its
+    # first-stage residual under SLEEP_PIX_STATE=use_cf.
+    s_macro = ['constant', *_pix_state.state_cols(), 'cadunico_families_per1000', 'fraction_65plus',
+               'risk_free_qoq_lag']
 
     # SLEEP_STATE_BLOCK=legacy7 restores the pre-trim state block, which adds gdp_per_capita
     # and fraction_young. That is the specification the stored estimates -- and therefore the
@@ -178,7 +182,7 @@ def define_specifications(time_block=False):
     # 1/g = 0.9887, against 0% and 6.9% for the stored block -- so which of the two should
     # become production is an open modelling decision, not a default to flip silently.
     if os.environ.get('SLEEP_STATE_BLOCK', '').strip().lower() == 'legacy7':
-        s_macro = ['constant', 'pix_exists', 'gdp_per_capita', 'cadunico_families_per1000',
+        s_macro = ['constant', *_pix_state.state_cols(), 'gdp_per_capita', 'cadunico_families_per1000',
                    'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
 
     s_tech = s_macro + ['connections_per100']
@@ -282,13 +286,18 @@ def build_pooled_data(time_block=False, center=True):
     # yields a silently wrong phi that still lies in [0,1].
     _st.apply_scale(df)
 
+    # The Pix state of the index (utils/pix_state.py). Under SLEEP_PIX_STATE=use_cf it writes Pix use
+    # and its first-stage residual with their own D-row values; under the default it does nothing.
+    df = _pix_state.add_columns(df, where="build_pooled_data")
+
     # The fill list must track the state block. A state that is IN the block but NOT filled
     # leaves the D-type rows -- digital banks and the k=5 national prepaid aggregates, the
     # highest-leverage observations in a levels regression -- without a value for it, which
     # distorts that state's slope and drags theta0 with it. Deriving both from one source
     # makes the two impossible to desync. Only market demographics are filled; the national
     # states below vary by time alone and have nothing to average across municipalities.
-    _NON_MARKET_STATES = {'constant', 'pix_exists', 'risk_free_qoq_lag'}
+    # The Pix columns of utils/pix_state.py carry their own D-row values, so the fill skips them.
+    _NON_MARKET_STATES = {'constant', 'pix_exists', 'risk_free_qoq_lag'} | set(_pix_state.state_cols())
     state_vars_to_fill = [s for s in define_specifications()[2]['Tech']
                           if s not in _NON_MARKET_STATES]
 

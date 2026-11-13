@@ -229,7 +229,7 @@ def build_second_stage_table(results_dict):
         ('IV_RivalSpread', 'Rival mean spread'),
     ]
     all_vars = [
-        'const', 'pix_exists', 'gdp_per_capita',
+        'const', 'pix_exists', 'pix_use', 'pix_use_cf', 'gdp_per_capita',
         'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
         'risk_free_qoq_lag', 'connections_per100',
     ]

@@ -42,8 +42,14 @@ Request 1 (ext1): the linear step on ext1's delta on types 1-2 (the spread is it
   the ext1 fits without the rows where ext1's delta is more than 10 from the logit's (a sensitivity: it
   selects on the outcome); and Anderson-Rubin sets for alpha on types 4-5 with the logit's and ext1's delta.
 
-Writes OUT = paths.rout_dir()/diag_w1_followups/: w1_followups.json and MD5SUMS (LF md5 of each output).
-Usage: python -I diagnostics/diag_w1_followups.py [--E 3,4]
+Step `tails` (11-12 23:24): the rows where ext1's delta is more than 10 from the logit's, where they sit,
+  their overlap with the inside-share cap, and the linear step without them or without the cap-bound
+  market-quarters. Step `t5` (main thread 11-13 10:27, request 2): the logit and ext1's linear step with
+  the type-5 spread kept out of the price coefficient (its own coefficient, or zero with a type-5 dummy).
+
+Writes OUT = paths.rout_dir()/diag_w1_followups/: w1_followups.json (main), w1_tails.json (tails),
+w1_type5.json (t5), and MD5SUMS (LF md5 of each JSON).
+Usage: python -I diagnostics/diag_w1_followups.py [--E 3,4] [--step main|tails|t5]
 """
 import os
 
@@ -586,12 +592,217 @@ def tails(E):
     return r
 
 
+XN = D.X_COLS + ["dummy_D_type"]
+# The stored paper keys the production design must reproduce (paper_numbers.md, 11-12 23:29): the mean
+# own-price elasticities demand.elast.logit.E{k} and demand.elast.blp.E{k}, to their three decimals.
+ELAST_KEYS = {3: {"logit": -0.245, "ext1": -0.825}, 4: {"logit": -0.243, "ext1": -0.868}}
+
+
+def ivg(delta, Xh, Xf, names, cl, seed=SEED):
+    """Just-identified IV with instruments Xh for the regressors Xf: theta = (Xh'Xf)^-1 Xh'delta. Equal to
+    the engines' OLS of delta on Xh whenever each projection holds every included regressor (then
+    Xh'Xf = Xh'Xh; `asym` reports the gap). CR1 as compute_cluster_se (bread (Xh'Xf)^-1, G/(G-1) N/(N-K))
+    and the score WCB on IF_g = (Xh'Xf)^-1 Xh_g' xi_g. All-zero columns are dropped with their names."""
+    keep = (np.abs(Xh).max(axis=0) > 0) | (np.abs(Xf).max(axis=0) > 0)
+    Xh, Xf = Xh[:, keep], Xf[:, keep]
+    nm = [x for x, kk in zip(names, keep) if kk]
+    N, K = Xh.shape
+    A = Xh.T @ Xf
+    Ai = np.linalg.inv(A)
+    th = Ai @ (Xh.T @ delta)
+    xi = delta - Xf @ th
+    c = pd.factorize(cl)[0]
+    G = int(c.max() + 1)
+    S = np.zeros((G, K))
+    np.add.at(S, c, Xh * xi[:, None])
+    corr = G / (G - 1) * N / (N - K)
+    V = Ai @ (S.T @ S) @ Ai.T * corr
+    IF = S @ Ai.T
+    rng = np.random.default_rng(seed)
+    W = WEBB[rng.integers(0, 6, size=(B, G))]
+    se_w = (th[None, :] + W @ IF).std(axis=0, ddof=1)
+    gs = gstar(c)
+    se_c = np.sqrt(np.diag(V))
+    out = {"n": int(N), "G": G, "G_star": gs, "K": int(K), "names": nm,
+           "asym": float(np.abs(A - Xh.T @ Xh).max() / np.abs(Xh.T @ Xh).max())}
+    for j, x in enumerate(nm):
+        out[x] = {"est": float(th[j]), "se_cr1": float(se_c[j]), "se_wcb": float(se_w[j]),
+                  "p_wcb_tGstar": float(2 * stats.t.sf(abs(th[j] / se_w[j]), gs))}
+    return out
+
+
+def t5_designs(X, Z, p, k):
+    """The linear designs (instruments Xh, regressors Xf, names) on the given rows, the projections run on
+    those rows. prod: production (types 4 and 5 projected within type on [X1, Z]). b: type 5's spread out
+    of the price term (zero there); type 5's level is fgc_covered's (1 exactly on types 1, 2, 4, 0 on
+    type 5). a_iv: type 5's spread with its own coefficient alpha5, instrumented by production's type-5
+    first stage; a_ols: alpha5 with the type-5 spread as its own instrument (exogenous). The "_d5"
+    versions add a type-5 dummy, which with fgc_covered spans a constant (outside the production design);
+    a_iv_d5's type-5 first stage then holds the constant ([X1, 1, Z] within type 5). In every design alpha
+    keeps production's treatment on types 1, 2 (exogenous) and 4 (projected on [X1, Z])."""
+    n5 = (k != 5).astype(float)
+    g5 = (k == 5).astype(float)
+    sh = spread_hat(X, Z, p, k)
+    r5 = k == 5
+    H5 = np.column_stack([X, np.ones(len(p)), Z])
+    b5, *_ = np.linalg.lstsq(H5[r5], p[r5], rcond=None)
+    sh5 = p.copy()
+    sh5[r5] = H5[r5] @ b5
+    cs = np.column_stack
+    # fgc_covered is 1 on every type 1, 2 and 4 row and 0 on every type-5 row (checked in `type5`), so the
+    # production X already carries type 5's level; a separate type-5 dummy adds a constant. The designs
+    # without "_d5" keep the production design; the "_d5" ones add the dummy (outside the no-constant design).
+    return {"prod": (cs([sh, X]), cs([p, X]), ["alpha"] + XN),
+            "b": (cs([sh * n5, X]), cs([p * n5, X]), ["alpha"] + XN),
+            "b_d5": (cs([sh * n5, X, g5]), cs([p * n5, X, g5]), ["alpha"] + XN + ["type5"]),
+            "a_iv": (cs([sh * n5, sh * g5, X]), cs([p * n5, p * g5, X]), ["alpha", "alpha5"] + XN),
+            "a_ols": (cs([sh * n5, p * g5, X]), cs([p * n5, p * g5, X]), ["alpha", "alpha5"] + XN),
+            "a_iv_d5": (cs([sh * n5, sh5 * g5, X, g5]), cs([p * n5, p * g5, X, g5]), ["alpha", "alpha5"] + XN + ["type5"]),
+            "a_ols_d5": (cs([sh * n5, p * g5, X, g5]), cs([p * n5, p * g5, X, g5]), ["alpha", "alpha5"] + XN + ["type5"])}
+
+
+def type5(E):
+    """Step `t5` (main thread 11-13 10:27, request 2): the logit and ext1's linear step with the type-5
+    spread kept out of the price coefficient (designs of t5_designs), on all rows and, for ext1, without
+    the rows where ext1's delta is more than 10 from the logit's (projections re-run on the kept rows;
+    theta_2 not re-estimated: a sensitivity). The mean own-price elasticity three ways: production's
+    formula alpha x mean over rows of rho (1 - s) (rho = spread in pp; s = share_B_cond or share_D;
+    finite, 0 <= s < 1), the model's (each row's own coefficient on its own spread: alpha5 on type 5 in
+    a, zero in b), and alpha x the mean over the rows whose spread enters alpha. The effective F of the
+    type-4 first stage (alpha) and of the type-5 first stage with a constant (alpha5 in a_iv). How common
+    the type-5 spread is within a quarter."""
+    S = load(E)
+    X, Z, p, k, cl, n, q = S["X"], S["Z"], S["p"], S["k"], S["cl"], S["n"], S["q"]
+    d = pq.read_table(S["path"], columns=["is_B", "share_B_cond", "share_D", "time_id"]).to_pandas()
+    dl = S["delta_logit"]
+    raw = (RAW / f"blp_checkpoint_E{E}_spec_12_ext1.jls").read_bytes()
+    de, info = jls_float_vector(raw, "delta_star")
+    if de is None or len(de) != n:
+        raise SystemExit(f"E{E}: delta_star did not parse: {info}")
+    isB = d["is_B"].fillna(False).astype(bool).to_numpy()
+    s = np.where(isB, d["share_B_cond"].to_numpy(float), d["share_D"].to_numpy(float))
+    m_el = np.isfinite(p) & np.isfinite(s) & (s >= 0.0) & (s < 1.0)
+    rs = np.where(m_el, p * (1.0 - s), 0.0)
+    g5 = k == 5
+    r = {"rows": n, "type5_rows": int(g5.sum())}
+    fgc = X[:, D.X_COLS.index("fgc_covered")]
+    r["fgc_covered_is_not_type5"] = {"rows_violating": int(((fgc == 1) == g5).sum()),
+                                     "type5_rows_with_fgc_1": int((g5 & (fgc == 1)).sum()),
+                                     "other_rows_with_fgc_0": int((~g5 & (fgc == 0)).sum())}
+    say(f"E{E} fgc_covered = 1(type != 5): violations {r['fgc_covered_is_not_type5']}")
+    # how common the type-5 spread is within a quarter (production frame, pp)
+    p5, q5, b5 = p[g5], q[g5], isB[g5]
+    dq = pd.DataFrame({"p": p5, "q": q5, "B": b5})
+    within = dq["p"] - dq.groupby("q")["p"].transform("mean")
+    r["type5_spread"] = {"mean_pp": float(p5.mean()), "sd_pp": float(p5.std()), "within_quarter_sd_pp": float(within.std()),
+                         "within_quarter_share_of_variance": float(within.var() / max(p5.var(), 1e-300)),
+                         "max_within_quarter_range_pp": float(dq.groupby("q")["p"].agg(lambda v: v.max() - v.min()).max()),
+                         "median_distinct_values_per_quarter": float(dq.groupby("q")["p"].nunique().median()),
+                         "B_minus_D_mean_gap_pp_by_quarter_maxabs": float(
+                             (dq[dq["B"]].groupby("q")["p"].mean() - dq[~dq["B"]].groupby("q")["p"].mean()).abs().max())
+                         if (~dq["B"]).any() else None}
+    say(f"E{E} type-5 spread: mean {p5.mean():.4f} pp, sd {p5.std():.4f}, within-quarter share of variance "
+        f"{r['type5_spread']['within_quarter_share_of_variance']:.4f}, max within-quarter range "
+        f"{r['type5_spread']['max_within_quarter_range_pp']:.4f} pp")
+    for gname, gm in (("B", dq["B"]), ("D", ~dq["B"])):
+        x = dq[gm]
+        if len(x) < 2:
+            continue
+        w_ = x["p"] - x.groupby("q")["p"].transform("mean")
+        r["type5_spread"][gname] = {"rows": int(len(x)), "quarters": int(x["q"].nunique()), "mean_pp": float(x["p"].mean()),
+                                    "sd_pp": float(x["p"].std()), "within_quarter_sd_pp": float(w_.std()),
+                                    "within_quarter_share_of_variance": float(w_.var() / max(x["p"].var(), 1e-300)),
+                                    "share_rows_off_quarter_median_by_0.5pp": float(
+                                        (np.abs(x["p"] - x.groupby("q")["p"].transform("median")) > 0.5).mean())}
+        say(f"E{E} type-5 spread {gname}: rows {len(x)}, mean {x['p'].mean():+.4f} pp, sd {x['p'].std():.4f}, within-quarter "
+            f"share {r['type5_spread'][gname]['within_quarter_share_of_variance']:.4f}, rows >0.5 pp off the quarter median "
+            f"{r['type5_spread'][gname]['share_rows_off_quarter_median_by_0.5pp']:.4f}")
+    # the shares behind type 5's delta: rows at the 1e-15 floor of the share (blp_logit.jl clamps ln s there)
+    r["shares_by_type"] = {}
+    for kv in (1, 2, 4, 5):
+        mk = k == kv
+        r["shares_by_type"][str(kv)] = {
+            "rows": int(mk.sum()), "share_at_floor_1e-14": float((s[mk] <= 1e-14).mean()),
+            "B_rows_at_floor": int((mk & isB & (s <= 1e-14)).sum()), "D_rows_at_floor": int((mk & ~isB & (s <= 1e-14)).sum()),
+            "delta_logit_q01_50_99": [float(x) for x in np.quantile(dl[mk], [0.01, 0.5, 0.99])],
+            "delta_ext1_q01_50_99": [float(x) for x in np.quantile(de[mk], [0.01, 0.5, 0.99])]}
+        say(f"E{E} type {kv}: rows at the share floor {r['shares_by_type'][str(kv)]['share_at_floor_1e-14']:.4f}; "
+            f"logit delta q01/50/99 {np.round(r['shares_by_type'][str(kv)]['delta_logit_q01_50_99'], 2)}")
+    # where type 5's own OLS slope comes from: all type-5 rows, with quarter effects, B rows, D rows
+    r["type5_ols"] = {}
+    for dn in ("logit", "ext1"):
+        dv = dl if dn == "logit" else de
+        sub = {"all": g5, "B": g5 & isB, "D": g5 & ~isB}
+        r["type5_ols"][dn] = {g_: iv(dv[m_], p[m_], X[m_], p[m_], cl[m_]) for g_, m_ in sub.items() if m_.sum() > 20}
+        r["type5_ols"][dn]["all_quarter_fe"] = ols_qfe(dv[g5], p[g5], X[g5], q[g5], cl[g5])
+        for g_, f_ in r["type5_ols"][dn].items():
+            say(f"E{E} type-5 OLS {dn:<5} {g_:<15} {f_['alpha']:+.4f} (CR1 {f_['se_cr1']:.4f}, WCB {f_['se_wcb']:.4f}) N {f_['n']}")
+
+    def run_set(delta, rows, tag):
+        Dsg = t5_designs(X[rows], Z[rows], p[rows], k[rows])
+        res = {}
+        for nm, (Xh, Xf, names) in Dsg.items():
+            f = ivg(delta[rows], Xh, Xf, names, cl[rows])
+            a = f["alpha"]["est"]
+            a5 = f["alpha5"]["est"] if "alpha5" in f else (a if nm in ("prod",) else 0.0)
+            mr, kr, rr = m_el[rows], k[rows], rs[rows]
+            den = float(mr.sum())
+            f["elast_prod_formula"] = a * float(rr[mr].mean())
+            f["elast_model"] = (a * float(rr[mr & (kr != 5)].sum()) + a5 * float(rr[mr & (kr == 5)].sum())) / den
+            f["elast_priced_rows"] = a * float(rr[mr & (kr != 5)].mean())
+            res[nm] = f
+            extra = f" alpha5 {f['alpha5']['est']:+.4f} ({f['alpha5']['se_wcb']:.4f})" if "alpha5" in f else ""
+            say(f"E{E} {tag:<16} {nm:<10} alpha {a:+.4f} WCB {f['alpha']['se_wcb']:.4f} p {f['alpha']['p_wcb_tGstar']:.3f}"
+                f"{extra} elast(prod formula) {f['elast_prod_formula']:+.4f} model {f['elast_model']:+.4f} N {f['n']} asym {f['asym']:.1e}")
+        return res
+
+    allr = np.ones(n, bool)
+    r["logit"] = run_set(dl, allr, "logit")
+    r["ext1"] = run_set(de, allr, "ext1")
+    tail = np.abs(de - dl) > 10.0
+    r["ext1_tail_dropped"] = run_set(de, ~tail, "ext1 tail-dropped")
+    r["ext1_tail_dropped"]["rows_dropped"] = int(tail.sum())
+    # gates: production design = the stored alpha (logit summary; ext1 summary) and the stored elasticity keys
+    prod_logit = json.loads((LOGIT / "logit_summary_spec_12.json").read_text(encoding="utf-8"))[f"E{E}_full_dtype"]
+    summ = json.loads((RAW / f"blp_summary_E{E}_ext1_gpu_ift.json").read_text(encoding="utf-8"))["12"]
+    g = {"logit_alpha": [r["logit"]["prod"]["alpha"]["est"], prod_logit["theta1"][0]],
+         "ext1_alpha": [r["ext1"]["prod"]["alpha"]["est"], summ["theta1_alpha"][0]],
+         "logit_elast": [r["logit"]["prod"]["elast_prod_formula"], ELAST_KEYS[E]["logit"]],
+         "ext1_elast": [r["ext1"]["prod"]["elast_prod_formula"], ELAST_KEYS[E]["ext1"]]}
+    g["pass"] = bool(abs(g["logit_alpha"][0] - g["logit_alpha"][1]) < 1e-7 and abs(g["ext1_alpha"][0] - g["ext1_alpha"][1]) < 1e-9
+                     and abs(g["logit_elast"][0] - g["logit_elast"][1]) < 5e-4 and abs(g["ext1_elast"][0] - g["ext1_elast"][1]) < 5e-4)
+    say(f"E{E} t5 gate: {g}")
+    if not g["pass"]:
+        raise SystemExit(f"t5 gate failed for E{E}")
+    r["gate"] = g
+    # the first stages
+    g4 = k == 4
+    r["feff"] = {"type_4_alpha": mop(Z[g4], X[g4], p[g4], cl[g4]),
+                 "type_5_alpha5_with_constant": mop(Z[g5], np.column_stack([X[g5], np.ones(int(g5.sum()))]), p[g5], cl[g5])}
+    for nm, f in r["feff"].items():
+        say(f"E{E} F_eff {nm:<28} {f['F_eff']:.3f} (crit tau10 {f['crit']['tau10']['crit']:.2f}, tau20 {f['crit']['tau20']['crit']:.2f})")
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--E", default="3,4")
-    ap.add_argument("--step", default="main", choices=["main", "tails"])
+    ap.add_argument("--step", default="main", choices=["main", "tails", "t5"])
     args = ap.parse_args()
     Es = [int(x) for x in args.E.split(",")]
+    if args.step == "t5":
+        out = {"meta": {"script": Path(__file__).name, "script_md5_lf": md5_lf(__file__), "step": "t5",
+                        "run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "units": "spread in pp; alpha per pp; elasticities unit-free"}}
+        for E in Es:
+            out[f"E{E}"] = type5(E)
+        OUT.mkdir(parents=True, exist_ok=True)
+        js = OUT / "w1_type5.json"
+        js.write_text(json.dumps(out, indent=1, default=str), encoding="utf-8", newline="\n")
+        lines = [f"{md5_lf(f)}  {f.name}\n" for f in sorted(OUT.glob("*.json"))]
+        (OUT / "MD5SUMS").write_text("".join(lines), encoding="utf-8", newline="\n")
+        say(f"wrote {js} and MD5SUMS")
+        return
     if args.step == "tails":
         out = {"meta": {"script": Path(__file__).name, "script_md5_lf": md5_lf(__file__), "step": "tails",
                         "run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "rule": "|delta_ext1 - delta_logit| > 10"}}

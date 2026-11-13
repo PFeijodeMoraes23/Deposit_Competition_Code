@@ -874,6 +874,8 @@ def main():
     parser.add_argument('--tables-only', action='store_true',
                         help="write the tables and the model bundle, skip the phi_t plots (the "
                              "linear routines' plot reads each ~2 GB market_panel_phis.csv)")
+    parser.add_argument('--skip-bundle', action='store_true',
+                        help="with --tables-only: do not rewrite the ~1.1 GB model bundle (.pkl)")
     args = parser.parse_args()
 
     print(f"Collecting Estimation results for Spec 12 ({_routines.SPEC12})...")
@@ -989,6 +991,8 @@ def main():
         'interaction_risk_free_qoq_lag',
         'interaction_connections_per100',
         'interaction_pix_exists',
+        'interaction_pix_use',
+        'interaction_pix_use_cf',
         'interaction_gdp_growth_yoy',
         'v_hat_x_lagged_dep',
     ]
@@ -1043,9 +1047,10 @@ def main():
     print(f"Exported LaTeX tables to {out_dir}")
 
     # ---- 2) Pickle Model Information ----
-    with open(data_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
-        pickle.dump(models_dict, f)
-    print(f"Exported combined model instances to {data_dir / 'est1-4_spec12_all_models.pkl'}")
+    if not (args.tables_only and args.skip_bundle):
+        with open(data_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
+            pickle.dump(models_dict, f)
+        print(f"Exported combined model instances to {data_dir / 'est1-4_spec12_all_models.pkl'}")
     if args.tables_only:
         return
 

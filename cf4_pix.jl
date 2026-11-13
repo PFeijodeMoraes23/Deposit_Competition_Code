@@ -140,7 +140,9 @@ identity-link fallback φ̂ − Υ_pix·pix is used (exact only for the linear s
 function cf4_pix_reallocation(ctx::CFDemandCtx, st::DepositSimState; upsilon_pix::Float64,
                               T::Int=8, phi_nopix::Union{Nothing,Vector{Float64}}=nothing,
                               pix_zero::Float64=0.0)
-    pix, pc = _first_present(ctx.df, ["pix_exists", "pix_active"]; default=0.0)
+    # pix_use first: the continuous Pix state of SLEEP_PIX_STATE=use_cf (no-Pix level 0, written as
+    # pix_level_zero by sleep_upsilon_export.py); pix_exists under the default.
+    pix, pc = _first_present(ctx.df, ["pix_use", "pix_exists", "pix_active"]; default=0.0)
     if phi_nopix === nothing
         # Identity-link fallback (exact only for E1/E2): drop the Pix term from the level φ̂.
         # The DEVIATION from the no-Pix level is what Υ_pix multiplies -- with the state block

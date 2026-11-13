@@ -337,15 +337,20 @@ def national_note(schemes, dk_bracket: bool = False) -> str:
     if not s:
         return ""                                   # no national rows in this table
 
-    lead = (r"Rows marked $\dagger$ are national regressors: Pix Available and the "
-            r"lagged Selic rate take a common value across all conglomerates within a quarter, "
+    # The Pix row is national only under the default Pix state (utils/pix_state.py).
+    from utils import pix_state as _pix_state
+    _pix_nat = _pix_state.mode() == "national"
+    lead = (r"Rows marked $\dagger$ are national regressors: "
+            + (r"Pix Available and the lagged Selic rate take" if _pix_nat else r"the lagged Selic rate takes")
+            + r" a common value across all conglomerates within a quarter, "
             r"so clustering on the conglomerate treats each firm's copy of a national value as "
             r"independent evidence and understates their sampling uncertainty. ")
 
     if s == {"congl"}:
         # Nothing time-robust was available anywhere: say so plainly rather than describe a
         # calculation that never ran.
-        return (r"Pix Available and the lagged Selic rate are national regressors, "
+        return ((r"Pix Available and the lagged Selic rate are national regressors, " if _pix_nat
+                 else r"The lagged Selic rate is a national regressor, ") +
                 r"constant across conglomerates within a quarter, so conglomerate clustering "
                 r"understates their sampling uncertainty; a time-robust standard error is not "
                 r"available for them in this table. ")

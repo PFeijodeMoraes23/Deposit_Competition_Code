@@ -294,7 +294,10 @@ def execute_specification(args):
 
 def define_specifications():
     s_base = ['constant']
-    s_macro = ['constant', 'pix_exists', 'cadunico_families_per1000', 'fraction_65plus', 'risk_free_qoq_lag']
+    # The Pix columns come from utils/pix_state.py, as in sleep_est_e2.define_specifications.
+    from utils import pix_state as _pix_state
+    s_macro = ['constant', *_pix_state.state_cols(), 'cadunico_families_per1000', 'fraction_65plus',
+               'risk_free_qoq_lag']
     s_tech = s_macro + ['connections_per100']
 
     iv_specs = {'OLS': [], 'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],

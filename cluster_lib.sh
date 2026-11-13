@@ -1063,6 +1063,7 @@ cl_bootstrap_tree () {
         echo "[dry-run]          PANEL_INTERMED/digital_banks_diagnostic.csv,"
         echo "[dry-run]          PANEL_INTERMED/estban_own_branches.csv,"
         echo "[dry-run]          PANEL_INTERMED/mca_gdp_real_growth.csv,"
+        echo "[dry-run]          PANEL_INTERMED/pix_exposures_2019_mca.csv, PANEL_INTERMED/pix_use_mca_quarter.csv,"
         echo "[dry-run]          BCB/Inclusion/bcb_banked_mca_panel.csv  <- ${CL_DATA_IN}"
         echo "[dry-run]          processed/ESTIMATION_OUTPUT -> ${CL_DATA_OUT}"
         echo "[dry-run]          => estimation_output() == ${CL_DATA_OUT}, the step dirs under it"
@@ -1115,6 +1116,12 @@ cl_bootstrap_tree () {
     # by sleep_est_e2.add_time_variables. Absent, every E4 frame build and --write-centers raise.
     _cl_link "${CL_DATA_IN}/mca_gdp_real_growth.csv" \
              "${proc}/PANEL_INTERMED/mca_gdp_real_growth.csv"       "real GDP growth by market"
+    # The Pix state under SLEEP_PIX_STATE=use_cf (utils/pix_state.py): the 2019 exposures and Pix use by
+    # market and quarter (make_pix_state_inputs.py). Read only under use_cf.
+    _cl_link "${CL_DATA_IN}/pix_exposures_2019_mca.csv" \
+             "${proc}/PANEL_INTERMED/pix_exposures_2019_mca.csv"    "Pix exposures of 2019"
+    _cl_link "${CL_DATA_IN}/pix_use_mca_quarter.csv" \
+             "${proc}/PANEL_INTERMED/pix_use_mca_quarter.csv"       "Pix use by market and quarter"
     # A REAL directory here would shadow the link and split the tree in half, so
     # refuse rather than overwrite: only an absent path or an existing symlink is
     # replaced. (ln -sfn on a real directory silently creates the link INSIDE it.)
