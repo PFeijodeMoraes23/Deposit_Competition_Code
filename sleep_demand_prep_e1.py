@@ -351,7 +351,11 @@ def process_specification(args):
 
     df_spec['phi_mt'] = df_spec['phi_mt'].clip(lower=0.0, upper=1.0)
 
-    df_mca_level = df_spec[['mca_code', 'time_id', 'phi_mt', 'pop_total']].drop_duplicates()
+    # The national φ_t is the population-weighted average of φ_mt over the quarter's B markets (the
+    # paper's φ_t = Σ_m M_mt φ_mt / M_t with M_mt ∝ Pop_mt). A D row's mca_code is NATIONAL and its
+    # pop_total is the national population, so it is not a market of this average: as one it would
+    # take about half of the weight.
+    df_mca_level = df_spec.loc[df_spec['is_B'], ['mca_code', 'time_id', 'phi_mt', 'pop_total']].drop_duplicates()
     df_mca_level = df_mca_level.dropna(subset=['pop_total'])
 
     def weighted_mean(g):

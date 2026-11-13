@@ -65,6 +65,13 @@ Nothing in the pipeline is edited and nothing here is a paper number.
       quarter (it keeps the lagged weights and drops the cost shifters), N_SHUFFLES = 99 draws in
       sequence from one generator seeded SEED, and refits both of those specifications on each
       draw: the median F and the share of draws with F at or above the real F, for each.
+      Every first stage is also clustered by state, on the same residuals and, in the placebo,
+      on the same draws (the state fit draws no random numbers): se_state, f_state, and the
+      placebo's median state-cluster F and share of draws at or above the real state-cluster F.
+      The state of an MCA is the mode of its municipalities' states in the IBGE crosswalk the
+      panel uses (each municipality's latest MCA); an MCA whose municipalities lie in two states
+      takes the state of most of them (ties: the lower code), and a market whose MCA is not in
+      the crosswalk is its own cluster. Both counts are written under p3.state_clusters.
       Measured-rate variant (D1's missing-and-drop robustness), when the panel has
       rate_a4_carried: S_measured_mt = sd_w over the banks whose type-4 rate is measured that
       quarter (rate_a4_carried = 0) x bal_mt; its instrument S~_measured_mt takes rho~ from the
@@ -79,7 +86,8 @@ sidecar, so it is not used); for 2015 rows,
 processed/demand_chars.parquet's r__dep_a1/2/4 (the raw-ESTBAN scale the preps use for 2016Q1's
 lag, utils/demand_chars.restore_2016q1_lags), only when it was built from the same panel;
 Rout/pix_usage_mca_quarter.parquet; Awareness/processed/advertising_panel_quarterly.parquet;
-PANEL_INTERMED/estban_own_branches.csv; the CCS inputs of make_ccs_openings_pix.py.
+PANEL_INTERMED/estban_own_branches.csv; the CCS inputs of make_ccs_openings_pix.py;
+IBGE/muni_mca_regions_2010_2024_panel.csv (P3's state clusters).
 
 Outputs (Rout): p1_pix_dose_exposure_mca.csv, p1_pix_use_path_mca_quarter.csv;
 p2_advertising_conglomerate_quarter.csv, p2_advertising_coverage_B.csv,
@@ -112,6 +120,7 @@ PANEL = paths.PROCESSED / "market_panel.parquet"
 USAGE = paths.rout_dir() / "pix_usage_mca_quarter.parquet"
 ADV = paths.AWARENESS_PROC / "advertising_panel_quarterly.parquet"
 BRANCHES = paths.PROCESSED / "PANEL_INTERMED" / "estban_own_branches.csv"
+XWALK = paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 OUT = paths.rout_dir()
 JSON = OUT / "p_shifters.json"
 T0, T1 = (2016, 1), (2024, 4)
@@ -166,6 +175,18 @@ def wsd_by(df, keys, x, w):
     mu = g["swx"] / g["sw"]
     var = (g["swx2"] / g["sw"] - mu ** 2).clip(lower=0.0)
     return pd.DataFrame({"mean": mu, "sd": np.sqrt(var), "n": g["n"]})
+
+
+def mca_state():
+    """The state of each MCA: the mode of state_code over its municipalities in the IBGE
+    crosswalk, each municipality at its latest MCA (the panel's mapping); ties take the lower code.
+    Also the MCAs whose municipalities lie in more than one state."""
+    xw = pd.read_csv(XWALK, usecols=["municipality_code", "year", "mca_code", "state_code"])
+    xw = xw.sort_values("year").drop_duplicates("municipality_code", keep="last")
+    xw["mca_code"] = xw["mca_code"].astype(str)
+    g = xw.groupby("mca_code")["state_code"]
+    n = g.nunique()
+    return g.agg(lambda s: int(s.mode().iloc[0])), sorted(n[n > 1].index)
 
 
 # ------------------------------------------------------------------------------------------ inputs
@@ -555,8 +576,14 @@ def p3(df, got):
     cols[0] = "mca_code"
     out[cols].sort_values(["mca_code", "year", "quarter"]).to_csv(OUT / "p3_stakes_mca_quarter.csv", index=False)
 
-    # Diagnostic: S on S~, MCA and quarter effects, MCA clusters (levels and logs); and the
-    # dispersion alone (log sd on log sd~), since S and S~ share the mean balance.
+    # State clusters: the MCA's state; a market whose MCA is not in the crosswalk is its own cluster.
+    st_map, multi_state = mca_state()
+    state = out["mca_code"].map(st_map)
+    out["state_cl"] = np.where(state.notna(), "uf" + state.fillna(0).astype(int).astype(str),
+                               "mca" + out["mca_code"].astype(str))
+
+    # Diagnostic: S on S~, MCA and quarter effects, MCA clusters and state clusters (levels and
+    # logs); and the dispersion alone (log sd on log sd~), since S and S~ share the mean balance.
     # The last spec adds the lagged market structure (log HHI of type-4 balances, log number of
     # banks) as controls: what the cost shifters add beyond it. The measured-rate variant repeats
     # the last two specs on its own sample.
@@ -569,16 +596,20 @@ def p3(df, got):
                    ("sd_spread_measured", "sd_rho_fit_measured", np.log, True))]
 
     def first_stage(d, y, z, ctrl):
-        """y on z with MCA and quarter effects, MCA clusters; ctrl adds the lagged log HHI and log
-        number of banks."""
+        """y on z with MCA and quarter effects, clustered by MCA (se, f) and by state (se_state,
+        f_state) on the same residuals; ctrl adds the lagged log HHI and log number of banks."""
         cols_ = [y, z] + ([np.log(d["hhi4_lag"].to_numpy()), np.log(d["n_banks4_lag"].to_numpy())]
                           if ctrl else [])
         w = np.ones(len(d))
         Rr = _resid(np.column_stack(cols_), w, [_codes(d["mca_code"]), _codes(d["qi"])])
         r = sm.OLS(Rr[:, 0], Rr[:, 1:]).fit(cov_type="cluster",
                                             cov_kwds={"groups": pd.factorize(d["mca_code"])[0]})
+        rs = sm.OLS(Rr[:, 0], Rr[:, 1:]).fit(cov_type="cluster",
+                                             cov_kwds={"groups": pd.factorize(d["state_cl"])[0]})
         return dict(slope=float(r.params[0]), se=float(r.bse[0]), f=float(r.tvalues[0] ** 2),
-                    n=int(len(d)), corr_raw=float(np.corrcoef(y, z)[0, 1]))
+                    n=int(len(d)), corr_raw=float(np.corrcoef(y, z)[0, 1]),
+                    se_state=float(rs.bse[0]), f_state=float(rs.tvalues[0] ** 2),
+                    n_state_clusters=int(d["state_cl"].nunique()))
 
     diag = {}
     for lab, (a_, b_, f, ctrl) in specs:
@@ -604,9 +635,12 @@ def p3(df, got):
         y, z = np.log(d["sd_spread"].to_numpy()), np.log(sdp[keep])
         r0, r1 = first_stage(d, y, z, False), first_stage(d, y, z, True)
         draws.append(dict(draw=k + 1, n=r0["n"], slope=r0["slope"], f=r0["f"],
-                          slope_net=r1["slope"], f_net=r1["f"]))
+                          slope_net=r1["slope"], f_net=r1["f"],
+                          f_state=r0["f_state"], f_net_state=r1["f_state"]))
     fp, fn = np.array([x["f"] for x in draws]), np.array([x["f_net"] for x in draws])
     f_real, f_net_real = diag["sd_only_log"]["f"], diag["sd_only_log_ctrl_structure"]["f"]
+    sp, sn = np.array([x["f_state"] for x in draws]), np.array([x["f_net_state"] for x in draws])
+    s_real, s_net_real = diag["sd_only_log"]["f_state"], diag["sd_only_log_ctrl_structure"]["f_state"]
     qs = lambda v: {str(p): float(np.quantile(v, p)) for p in (0.0, 0.1, 0.5, 0.9, 1.0)}
     placebo = dict(n_shuffles=N_SHUFFLES, seed=SEED, f_real=f_real, f_net_real=f_net_real,
                    f_median=float(np.median(fp)), f_net_median=float(np.median(fn)),
@@ -614,7 +648,23 @@ def p3(df, got):
                    share_ge=float((fp >= f_real).mean()), share_ge_net=float((fn >= f_net_real).mean()),
                    p_perm=float((1 + (fp >= f_real).sum()) / (1 + N_SHUFFLES)),
                    p_perm_net=float((1 + (fn >= f_net_real).sum()) / (1 + N_SHUFFLES)),
-                   f_quantiles=qs(fp), f_net_quantiles=qs(fn), draws=draws)
+                   f_quantiles=qs(fp), f_net_quantiles=qs(fn),
+                   # The same draws, clustered by state: share_ge_state is the share of draws whose
+                   # state-cluster F is at or above the real state-cluster F.
+                   f_state_real=s_real, f_net_state_real=s_net_real,
+                   f_state_median=float(np.median(sp)), f_net_state_median=float(np.median(sn)),
+                   n_ge_state=int((sp >= s_real).sum()), n_ge_net_state=int((sn >= s_net_real).sum()),
+                   share_ge_state=float((sp >= s_real).mean()),
+                   share_ge_net_state=float((sn >= s_net_real).mean()),
+                   p_perm_state=float((1 + (sp >= s_real).sum()) / (1 + N_SHUFFLES)),
+                   p_perm_net_state=float((1 + (sn >= s_net_real).sum()) / (1 + N_SHUFFLES)),
+                   f_state_quantiles=qs(sp), f_net_state_quantiles=qs(sn), draws=draws)
+    fsr = out[(out["sd_spread"] > 0) & (out["sd_rho_fit"] > 0) & (out["S"] > 0) & (out["S_tilde"] > 0)]
+    state_clusters = dict(
+        crosswalk=XWALK.name, n_states=int(st_map.nunique()), mca_multi_state=multi_state,
+        n_mq_multi_state_first_stage=int(fsr["mca_code"].isin(multi_state).sum()),
+        n_mq_no_state_first_stage=int(fsr["state_cl"].str.startswith("mca").sum()),
+        n_clusters_first_stage=int(fsr["state_cl"].nunique()))
     q = lambda s: {str(p): float(s.quantile(p)) for p in (0.1, 0.25, 0.5, 0.75, 0.9)}
     ok = out[out["S"].notna()]
     by_year = {int(y): dict(sd_spread_pp_median=float(g["sd_spread_pp"].median()),
@@ -634,7 +684,8 @@ def p3(df, got):
                  fallback_weight_share_mean=float(ok["fallback_weight_share"].mean()),
                  mq_with_fallback_weight=int((ok["fallback_weight_share"] > 0).sum()),
                  rho_fit_weight_share_mean=float(out["rho_fit_weight_share"].mean()),
-                 by_year=by_year, cost_fit=fitstats, S_on_S_tilde=diag, placebo=placebo)
+                 by_year=by_year, cost_fit=fitstats, S_on_S_tilde=diag, placebo=placebo,
+                 state_clusters=state_clusters)
     stamp(f"P3: {stats['n_mq_S']:,} of {stats['n_mq']:,} market-quarters with S; median S "
           f"R$ {stats['S_quantiles']['0.5']:.1f}/yr; cost fit joint F {fitstats['joint_f']:.2f}; "
           f"S on S~ F {diag['level']['f']:.2f} (level), {diag['log']['f']:.2f} (log), "
@@ -643,6 +694,12 @@ def p3(df, got):
     stamp(f"P3 placebo, {N_SHUFFLES} shuffles of rho~ (seed {SEED}): median F {placebo['f_median']:.2f}, "
           f"{placebo['n_ge']} at or above the real {f_real:.2f}; net of structure median "
           f"{placebo['f_net_median']:.2f}, {placebo['n_ge_net']} at or above the real {f_net_real:.2f}")
+    stamp(f"P3 state clusters ({state_clusters['n_clusters_first_stage']} in the first stage; "
+          f"{len(multi_state)} MCA(s) in two states, {state_clusters['n_mq_multi_state_first_stage']} "
+          f"first-stage rows; {state_clusters['n_mq_no_state_first_stage']} rows without a state): "
+          f"F {s_real:.2f}, net {s_net_real:.2f}; placebo median {placebo['f_state_median']:.2f} "
+          f"({placebo['n_ge_state']} at or above), net {placebo['f_net_state_median']:.2f} "
+          f"({placebo['n_ge_net_state']} at or above)")
     if not meas:
         stats["measured"] = "panel has no rate_a4_carried: variant not built"
         stamp("P3: no rate_a4_carried in this panel; the measured-rate columns are empty")

@@ -25,6 +25,8 @@
 #   RC_STAGE    sigma|rc2|rc3|rc4|full|ext1|ext2|extended, or several joined with '+'
 #   R SEED TOL_INNER MAX_INNER TOL_OUTER   engine knobs
 #   BLP_SE_ONLY=1                          recompute SEs from existing checkpoints
+#   BLP_EXT1_FLAGS=0                       ext1 at the engine's default outer/inner flags too
+#                                          (default 1: the ext1 flags below are on)
 #
 # WHERE ITS ARTIFACTS GO: data/output/blp — results, checkpoints and summaries all
 #   land in the one folder of_root.jl's blp_dir(out_dir) names, and they STAY there.
@@ -55,6 +57,11 @@ set -e
 case "${RC_ENGINE}" in
     ift|numerical|cue) ;;
     *) echo "RC_ENGINE='${RC_ENGINE}' is not a recognised engine (ift|numerical|cue)" >&2; exit 2 ;;
+esac
+# The ext1 flags switch (see "ext1 flags" below), checked here for the same reason.
+case "${BLP_EXT1_FLAGS:-1}" in
+    0|1) ;;
+    *) echo "BLP_EXT1_FLAGS='${BLP_EXT1_FLAGS}' must be 0 or 1" >&2; exit 2 ;;
 esac
 
 mkdir -p "${CL_ROOT}/logs"
@@ -121,12 +128,43 @@ cl_banner "RC-BLP E${RC_ROUTINE} | engine=${RC_ENGINE} | stage=${STAGE_ARG}" \
 SE_ONLY_ARG=()
 [[ "${BLP_SE_ONLY:-0}" == "1" ]] && SE_ONLY_ARG=(--se-only)
 
-julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} \
-    --threads="${SLURM_CPUS_PER_TASK:-6}" \
-    "${CL_ROOT}/blp_rc.jl" \
-    --estim "${RC_ROUTINE}" --stage "${STAGE_ARG}" \
-    --hpc --R "${R}" --seed "${SEED}" \
-    --tol-inner "${TOL_INNER}" --max-inner "${MAX_INNER}" --tol-outer "${TOL_OUTER}" \
-    ${SE_ONLY_ARG[@]+"${SE_ONLY_ARG[@]}"}
+# One Julia process over a comma list of stages. Each stage warm-starts from the previous stage's
+# checkpoint on disk, so a list run in one process or in several gives the same chain.
+run_stages () {   # run_stages <comma list of stages>
+    echo "[stages ${1}] BLP_OUTER_STEP=${BLP_OUTER_STEP:-unset} BLP_OUTER_R0=${BLP_OUTER_R0:-unset}" \
+         "BLP_INNER_GUARD=${BLP_INNER_GUARD:-unset} BLP_INNER_CLAMP_TEST=${BLP_INNER_CLAMP_TEST:-unset}" \
+         "(unset: the engine's default)"
+    julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} \
+        --threads="${SLURM_CPUS_PER_TASK:-6}" \
+        "${CL_ROOT}/blp_rc.jl" \
+        --estim "${RC_ROUTINE}" --stage "${1}" \
+        --hpc --R "${R}" --seed "${SEED}" \
+        --tol-inner "${TOL_INNER}" --max-inner "${MAX_INNER}" --tol-outer "${TOL_OUTER}" \
+        ${SE_ONLY_ARG[@]+"${SE_ONLY_ARG[@]}"}
+}
+
+# ── ext1 flags ───────────────────────────────────────────────────────────────
+# The IFT engine solves ext1, every one of its starts (cold, warm_rc4 and the extra starts of
+# config/blp_ext1_extra_starts.csv), with the engine's first-step control and inner-loop guard on
+# (blp_engine_cpu.jl): BLP_OUTER_STEP=lite with BLP_OUTER_R0=0.02 (the first trial moves no
+# coordinate more than 0.02), BLP_INNER_GUARD=1 and BLP_INNER_CLAMP_TEST=1. Validated on E3 and E4
+# ext1 on 2026-11-12 (sandbox tag val1112): with them the cold start reaches ext1's optimum, and
+# the control and warm_rc4 starts end where the fit without them did. Every other stage keeps the
+# engine's defaults, so a job whose list holds ext1 among other stages (the grouped head
+# sigma+rc2+rc3+rc4+ext1) runs ext1 in a Julia process of its own. A value the caller exports wins,
+# in every stage; BLP_EXT1_FLAGS=0 leaves ext1 at the engine's defaults as well. The numerical and
+# CUE engines, and an SE-only job (which runs no solve), get none of them and run as one process.
+if [[ "${BLP_EXT1_FLAGS:-1}" == "1" && "${RC_ENGINE}" == "ift" && "${BLP_SE_ONLY:-0}" != "1" \
+      && ",${STAGE_ARG}," == *",ext1,"* ]]; then
+    pre="${STAGE_ARG%%ext1*}"; pre="${pre%,}"        # the stages before ext1 in the list
+    post="${STAGE_ARG#*ext1}"; post="${post#,}"      # and after it
+    [[ -z "${pre}" ]] || run_stages "${pre}"
+    ( export BLP_OUTER_STEP="${BLP_OUTER_STEP:-lite}" BLP_OUTER_R0="${BLP_OUTER_R0:-0.02}" \
+             BLP_INNER_GUARD="${BLP_INNER_GUARD:-1}" BLP_INNER_CLAMP_TEST="${BLP_INNER_CLAMP_TEST:-1}"
+      run_stages ext1 )
+    [[ -z "${post}" ]] || run_stages "${post}"
+else
+    run_stages "${STAGE_ARG}"
+fi
 
 echo "RC-BLP E${RC_ROUTINE} ${RC_ENGINE} ${RC_STAGE} complete: $(date)"

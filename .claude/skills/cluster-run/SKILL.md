@@ -136,9 +136,13 @@ on cluster code, say this explicitly and ask it to label each claim.
 - After a solve: in `cost_params_*.json`, `n_shards_found` equals `n_shards_expected`, and the
   `run` block records the beta and T the psi was simulated under. A cost estimate without that
   equality is not to be used.
-- RC-BLP ext1: the pipeline's two starts (cold, and rc4's solution with the added pi at zero) can
-  stop at rc4's solution, a local optimum. The sign is ext1's Q equal to rc4's and the last pi at
-  exactly 0 (10-16 and R3 on 10-29). The remedy is the sandboxed multi-start
+- RC-BLP ext1 runs with the engine's step and inner-guard flags on by default (`blp_stage_job.sh`,
+  `BLP_EXT1_FLAGS=0` to turn them off; `cluster/RUNBOOK.md` section 6). Read them in the head log:
+  the ext1 `[OUTER]` line says `step lite (r0 0.02) | inner guard on | clamp test on`, every other
+  stage's says `step off`. Before that default, the pipeline's two starts (cold, and rc4's solution
+  with the added pi at zero) could stop at rc4's solution, a local optimum. The sign is ext1's Q
+  equal to rc4's and the last pi at exactly 0 (10-16 and R3 on 10-29). The remedy is the sandboxed
+  multi-start
   `blp_ext1_starts.sh` (`EXT1_TAG`, starts in `blp_ext1_starts_<tag>.csv`), then
   `blp_ext1_adopt.sh <k> <start>` for the lowest converged Q with `se_status` ok. Adopting is the
   user's call.

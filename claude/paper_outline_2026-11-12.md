@@ -15,20 +15,20 @@ This is the plan for Section 7 and its appendices. The earlier Section 7 plan an
 
 A depositor whose money sits at bank $j^\prime$ treats another bank $j$ as available with probability
 
-$$\tilde{A}_{j\mid j^\prime mt} = \Lambda\left(\gamma_0 + \gamma_1\,\mathrm{adv}_{jt} + \gamma_2\,\mathrm{branches}_{jm,t-1} + \gamma_{P}\,\mathbf{1}\{t \geq 2020\mathrm{Q}4\} - \kappa^{c}\,\mathrm{TD}_{j^\prime m,t-1}\right)$$
+$$A_{j\mid j^\prime mt} = \Lambda\left(\gamma_0 + \gamma_1\,\mathrm{adv}_{jt} + \gamma_2\,\mathrm{branches}_{jm,t-1} + \gamma_{P}\,\mathrm{Pix}_{mt} - \gamma_C\,\mathrm{TD}_{j^\prime m,t-1}\right)$$
 
 and always treats her own bank as available. $\mathrm{TD}_{j^\prime m,t-1}$ is the share of the source bank's lagged stock held in time deposits.
 
 - **One object, two readings.** A bank is unavailable because the depositor does not know it or because moving to it costs too much. Balances cannot tell these apart, and the model no longer tries. It separates them by what moves them.
 - **Awareness** moves with advertising ($\gamma_1$) and branches ($\gamma_2$).
 - **The switching cost** moves with Pix ($\gamma_{P}$, and optionally a dose term in instrumented Pix use). Its level is inside $\gamma_0$.
-- **The tax clock** makes money at banks heavy in time deposits harder to move ($\kappa^{c}$).
+- **The tax clock** makes money at banks heavy in time deposits harder to move ($\gamma_C$).
 - **New money** has no source, so it pays no cost. Its index has its own constant and no Pix or clock term. In principle the gap between the two constants is the level of the switching cost. In practice the outside pool is too poorly measured to read it, so that constant is a nuisance parameter.
 - **Utility is equation (1), unchanged.** The utility with a cost $\kappa$ and a clock premium (the current equation (12)) is dropped.
 - **Attention** is the term you accepted last night: $\phi_{mt} = G\left(\boldsymbol{\Upsilon}^\prime\boldsymbol{S}_{mt} - \tau_0\,\mathrm{Selic}_{t-1} - \tau_1\,\mathrm{stakes}_{mt}\right)$.
 - **The law of motion** loses the maturity and liquidity split ($\omega$, $\lambda$, $\ell$).
 
-**What is estimated:** $\tau_0$, $\tau_1$, $\gamma_1$, $\gamma_{P}$, $\kappa^{c}$, and possibly $\gamma_2$ and the dose. **What is not:** the level of the switching cost, the level of awareness, and sorting.
+**What is estimated:** $\tau_0$, $\tau_1$, $\gamma_1$, $\gamma_{P}$, $\gamma_C$, and possibly $\gamma_2$ and the dose. **What is not:** the level of the switching cost, the level of awareness, and sorting.
 
 ## 3. Section 7, new outline
 
@@ -87,14 +87,14 @@ Already applied and still right: the Oxford commas, the shorter table notes, B2,
 
 1. **You:** accept or change this outline, and decide Appendix E (move or keep as a check).
 2. **Main thread:** write the blocks for 7.1 and 7.2 and for Appendix D. They need no new number.
-3. **IMPR:** the work in `MAIN_REPLY_2026-11-12.md`. The first results that feed the text are the stakes coefficient and the test on own money.
+3. **IMPR:** the work in `MAIN_IMPR_CHANNEL.md` (it replaced `MAIN_REPLY_2026-11-12.md` on 11-12). The first results that feed the text are the stakes coefficient and the test on own money.
 4. **Main thread:** write 7.3 and the short awareness appendix as results arrive. Align both notes.
 
 ## 7. Cautions that the text will have to carry
 
 1. **No shifter, no separation.** Every claim is about a shifter. The Pix shift could be awareness. Two things answer that: advertising is in the same index, and openings at B banks did not jump at the launch.
 2. **One launch date.** The pandemic, the emergency aid, and the tightening cycle share it.
-3. **The time-deposit share is not random.** Banks heavy in time deposits have different clients, so $\kappa^{c}$ may pick up sorting. It is an attempt, as you said.
+3. **The time-deposit share is not random.** Banks heavy in time deposits have different clients, so $\gamma_C$ may pick up sorting. It is an attempt, as you said.
 4. **New money dominates the awake pool by the current measure** (the outside pool is 97 percent of the market size). If that holds, own and rival money differ too little for the test on own money to have power. IMPR checks this first, and under more than one cap.
 5. **The baseline price coefficient is not settled.** It moves with the cap, and its first stage is under review, with your point that checking and savings spreads are exogenous now part of the test.
 6. **None of this has been estimated or simulated in this form.**
@@ -106,4 +106,10 @@ Your point: a Pix term inside the availability index reads as the effect of Pix 
 - **Two coefficients.** $\gamma_{P}$ shifts the availability of rivals for money that has a bank to leave. $\gamma_{P\varnothing}$ shifts the index of new money and of account openings, which is awareness alone, since neither involves leaving a bank.
 - **The switching cost is the difference,** $\gamma_{P} - \gamma_{P\varnothing}$. If Pix only raised awareness, the two are equal and openings rise at the launch. If it only lowered the cost, $\gamma_{P\varnothing} = 0$ and openings do not move.
 - **Cautions in the text.** Accounts opened to receive transfers reflect convenience as well as awareness, so openings may overstate the awareness part. New money is the worst-measured pool. The launch shares its date with the pandemic, the emergency aid, and the tightening cycle.
-- **Where this changes the outline above:** every statement that the Pix shift is the switching cost (Sections 1, 2, and 7 of this file) should be read with this refinement. The symbol $\kappa^{P}$ is gone. The tax-clock term $\kappa^{c}$ is unchanged.
+- **Where this changes the outline above:** every statement that the Pix shift is the switching cost (Sections 1, 2, and 7 of this file) should be read with this refinement. The symbol $\kappa^{P}$ is gone. The tax-clock term $\gamma_C$ is unchanged.
+
+## 9. Later decisions of 11-12 (evening)
+
+- **Pix enters through instrumented use,** $\mathrm{Pix}_{mt}$, and not through the launch indicator. Every statement above about "the shift at the Pix launch" should be read with this.
+- **The market size is rebuilt from measured new money,** on the public's universe. The state of that work is in `MAIN_IMPR_CHANNEL.md`, section A3.
+- **The fee enters the demand model,** and the stakes first stage is clustered by state.

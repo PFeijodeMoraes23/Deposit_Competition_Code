@@ -5,13 +5,13 @@ Author: Pedro Feijó de Moraes
 Renders tab_state_vector_map.tex (label tab:state_vector_map), one non-breaking table in two
 panels:
 
-  Panel A  every state of the specification (12) block and every collected candidate left out:
-           the depositor trait it measures, the share of its variance the entity and quarter
-           fixed effects absorb, and its law of motion in the forward simulation (or the reason it
-           is left out). Four columns, laid on the five-column grid of Panel B: the law of motion
-           spans the last two.
+  Panel A  every state of the specification (12) block: the depositor trait it measures, the
+           share of its variance the entity and quarter fixed effects absorb, and its law of
+           motion in the forward simulation. Four columns, laid on the five-column grid of Panel
+           B: the law of motion spans the last two.
   Panel B  the conditioning of the two-way-demeaned regressors of eq. (13) when a second moment
-           of a characteristic already in the block is added.
+           of a characteristic already in the block is added: the collected candidates the block
+           leaves out (GDP per capita, the young share, the 4G/5G share of mobile lines).
 
 Every number comes from ESTIMATION_OUTPUT/DIAG_STATE_SELECTION, written by
 diagnostics/diag_state_vector_selection.py from the regressors alone. The unrounded values go to
@@ -42,9 +42,9 @@ BASENAME = "tab_state_vector_map"
 LABEL = "tab:state_vector_map"
 PROD_BLOCK = "S5"
 
-# Panel A. (state, label, trait, block whose design row carries the state,
-# law of motion or reason left out). Labels follow sleep_export_link._BASE_LABELS; the laws of
-# motion are those of bbl_sleep_link.ROLE_OF and bbl_transitions.S_COLS.
+# Panel A. (state, label, trait, block whose design row carries the state, law of motion).
+# Labels follow sleep_export_link._BASE_LABELS; the laws of motion are those of
+# bbl_sleep_link.ROLE_OF and bbl_transitions.S_COLS.
 IN_ROWS = [
     ("risk_free_qoq_lag", "Lagged Selic Rate", "Common: stakes of shopping",
      PROD_BLOCK, "Focus forward curve, lagged one quarter"),
@@ -56,18 +56,6 @@ IN_ROWS = [
      PROD_BLOCK, "AR(1) within market"),
     ("connections_per100", "Mobile Lines", "Composition: digital access",
      PROD_BLOCK, "AR(1) within market"),
-]
-OUT_ROWS = [
-    ("gdp_per_capita", r"GDP \textit{per capita}", "Composition: income",
-     "S7", "Second income moment; enters demand ($\\pi$)"),
-    ("fraction_young", "Fraction Young (15--20)", "Composition: age",
-     "S7", "Second age moment"),
-    ("frac_4g5g", "4G/5G Share of Mobile Lines", "Composition: digital access",
-     "S5+frac_4g5g", "Second digital-access moment"),
-    (None, "Pix Users and Transactions", "Pix usage intensity",
-     None, "Equilibrium object: adoption responds to attention"),
-    (None, "Branch and Access-Point Density", "Institutions' networks",
-     None, "Chosen by the institutions"),
 ]
 
 # Panel B. (block, row label, what it adds).
@@ -128,16 +116,6 @@ def render(design, per_var) -> tuple[str, dict]:
         a = absorbed(per_var, blk, state)
         side["absorbed_alone"][state] = a
         body.append(f"{lab} & {trait} & {_abs(f3(a))} & {_motion(motion)} \\\\")
-    body += [r"\addlinespace[0.3em]",
-             r"\multicolumn{5}{@{}l}{Collected, not in the state vector} \\*"]
-    for state, lab, trait, blk, reason in OUT_ROWS:
-        if state is not None and blk in set(per_var["block"]):
-            a = absorbed(per_var, blk, state)
-            side["absorbed_alone"][state] = a
-            cell = f3(a)
-        else:
-            cell = "--"
-        body.append(f"{lab} & {trait} & {_abs(cell)} & {_motion(reason)} \\\\")
     body += [r"\midrule",
              r"\multicolumn{5}{@{}l}{\textit{Panel B. Conditioning of the regressors of the second "
              r"stage of the sleepiness estimation}} \\*",
@@ -157,9 +135,9 @@ def render(design, per_var) -> tuple[str, dict]:
                     f"{f3(d['effdim_participation'])} & "
                     f"\\multicolumn{{1}}{{c}}{{{f1c(d['max_vif'])}}} \\\\")
     note = (
-        r"\textit{Notes:} Panel A: the states at specification (12) and the collected candidates "
-        r"left out. Absorbed by FE: the share of the state's variance absorbed by bank $\times$ "
-        r"type $\times$ market and quarter fixed effects, on the specification (12) sample. "
+        r"\textit{Notes:} Panel A: the states at specification (12). Absorbed by FE: the share "
+        r"of the state's variance absorbed by bank $\times$ type $\times$ market and quarter "
+        r"fixed effects, on the specification (12) sample. "
         r"Panel B: the two-way-demeaned regressors of the second stage of the sleepiness "
         r"estimation. VIF: variance inflation factor. Definitions: Appendix "
         r"\ref{app:empirical:sleep}."

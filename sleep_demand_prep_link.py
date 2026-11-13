@@ -332,7 +332,7 @@ def _apply_link(index_series, link, res_ss):
 # Requires on df_spec: is_B, phi_mt, phi_t, Dep_Act, pop_total, mca_code,
 #                      time_id, year, gdp_per_capita, banked_correction,
 #                      findex_banked_frac
-# Adds:  M_mt, M_nat, share_B_cond, share_D
+# Adds:  M_mt (B rows; NaN on D rows), M_nat, share_B_cond, share_D
 # ==============================================================================
 def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     """Market size M and the shares of ACTIVE depositors. See counterfactuals_plan.md §0."""
@@ -383,16 +383,17 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
         df_spec['_access'] = _acc
         df_spec['_bc'] = 1.0 / (_fx * _acc)
 
-    mkt = df_spec.groupby(['mca_code', 'time_id']).agg(_pop=('pop_total', 'first'),
-                                                       _bc_mt=('_bc', 'first'),
-                                                       _acc_mt=('_access', 'first'))
-    # (1-φ) for the LOCAL market must come from a B row (φ_mt). Taking the group's `first` row can
-    # pick a D row, whose (1-φ) is built from the NATIONAL φ_t — which would break the floor bound.
+    # The market table: one row per B market-quarter (mca_code × time_id), built from the B rows alone,
+    # so its (1-φ) is the local φ_mt. A D row's mca_code is NATIONAL and its pop_total is the national
+    # population: as a row of this table it would be a pseudo-market whose population counts the B
+    # markets' people a second time in every national aggregate below. The D firms' market is M_nat,
+    # built further down from these B markets.
     _b = df_spec[df_spec['is_B']]
-    mkt = mkt.join(_b.groupby(['mca_code', 'time_id'])['_1mphi'].first().rename('_1mphi'), how='left')
-    mkt['_1mphi'] = mkt['_1mphi'].fillna(1.0 - PHI_CAP)
-    b_dep_mt = _b.groupby(['mca_code', 'time_id'])['Dep_Act'].sum().rename('_dep_B')
-    mkt = mkt.join(b_dep_mt, how='left').fillna({'_dep_B': 0.0})
+    mkt = _b.groupby(['mca_code', 'time_id']).agg(_pop=('pop_total', 'first'),
+                                                  _bc_mt=('_bc', 'first'),
+                                                  _acc_mt=('_access', 'first'),
+                                                  _1mphi=('_1mphi', 'first'),
+                                                  _dep_B=('Dep_Act', 'sum'))
 
     # ── The anchor r̂ ───────────────────────────────────────────────────────────────────────────
     # The share is  s = Dep_Act / ((1-φ)·bc·r̂·Pop) = dens · findex · access / r̂ ,
@@ -402,6 +403,8 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     # definition names Q95 as its saturated reference. The original `max` anchor sat 16× ABOVE that
     # reference (it was set by a 74,000-population municipality — an ESTBAN HQ-booking artifact),
     # which is internally inconsistent with bc and is what produced the 99.9% outside option.
+    # The local quantile runs over the B market-quarters; the national ratio of a quarter divides every
+    # row's active-equivalent balance, B and D, by the population of that quarter's B markets.
     local_ratio = ((mkt['_dep_B'] / (mkt['_1mphi'] * mkt['_pop'])) * mkt['_acc_mt']) \
         .replace([np.inf, -np.inf], np.nan)
     dep_over_1mphi = (df_spec['Dep_Act'] / df_spec['_1mphi']).replace([np.inf, -np.inf], np.nan)
@@ -446,7 +449,11 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
               f"({100*_n_bind/len(mkt):.2f}%)  [RMAX_RULE={RMAX_RULE}, PHI_CAP={PHI_CAP}, "
               f"TOTAL_SHARE_CAP={TOTAL_SHARE_CAP}]")
 
+    # A B row takes its market's size; a D row has no local market, so its M_mt is NaN.
     df_spec = df_spec.merge(mkt[['_b_mkt']].reset_index(), on=['mca_code', 'time_id'], how='left')
+    # The national D-firm market: the quarter's B markets taken together. d̄_nat is r̂ times their
+    # population-weighted bc and Pop_nat is their population, so M_nat = r̂ · Σ_m bc_mt · Pop_mt, the sum
+    # of the B markets' anchor sizes; the weights and the population cover the same people.
     mkt_r = mkt.reset_index()
     mkt_r['_w'] = mkt_r['_bc_mt'] * mkt_r['_pop']
     nat_dbar = (mkt_r.groupby('time_id')
@@ -475,7 +482,7 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     # per-type scalar dbar·pop_total that ignores banked_correction entirely. That meant the demand
     # model was ESTIMATED under one market size and the CFs SIMULATED under another. Keeping these
     # two columns lets cf_deposit_sim.jl consume the estimation's own M. See §9.8.
-    df_spec['M_mt'] = df_spec['_b_mkt']      # local market size (B firms)
+    df_spec['M_mt'] = df_spec['_b_mkt']      # local market size (B rows; NaN on D rows)
     df_spec['M_nat'] = df_spec['_d_mkt']     # national market size (D firms)
     df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)
     return df_spec
@@ -520,7 +527,12 @@ def process_specification(spec_name, spec_res, df_base, link, pre_cut=False):
     # NATIVE index -> phi via the estimator's link (AMEs are NOT used here).
     df_spec['phi_mt'] = _apply_link(df_spec['phi_mt'], link, res_ss)
 
-    df_mca = df_spec[['mca_code', 'time_id', 'phi_mt', 'pop_total']].drop_duplicates().dropna(subset=['pop_total'])
+    # The national φ_t is the population-weighted average of φ_mt over the quarter's B markets (the
+    # paper's φ_t = Σ_m M_mt φ_mt / M_t with M_mt ∝ Pop_mt). A D row's mca_code is NATIONAL and its
+    # pop_total is the national population, so it is not a market of this average: as one it would
+    # take about half of the weight.
+    df_mca = (df_spec.loc[df_spec['is_B'], ['mca_code', 'time_id', 'phi_mt', 'pop_total']]
+              .drop_duplicates().dropna(subset=['pop_total']))
 
     def weighted_mean(g):
         v, w = g['phi_mt'], g['pop_total']

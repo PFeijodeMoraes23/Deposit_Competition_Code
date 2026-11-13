@@ -1938,6 +1938,189 @@ def collect_fees(notes: list):
             f"({e.get('script', '')}, {e.get('run_at', '')})", "ok", display=display, unit=u)
 
 
+# The fee keys of the demand side (fees plan of 11-12, its section 5.5): the listed Package I price
+# (code 1501, individuals) that stage 7 (fees/panel_fee_merge.py --patch-market) puts on the fee
+# panel, the issuers' account-keeping rules for D, and the demand parquets for the weights.
+FEE_PANEL = _paths.PROCESSED / "market_panel_with_fees.parquet"
+FEE_PKG1 = "listed_fee_pkg1_pf"
+# The D conglomerates of DATA_RAW/issuers/posted_rates/account_fees.csv, by its `issuer` label, on
+# the panel's codes. PagBank sits under BancoSeguro SA (C0084813) by name only: no panel label
+# names PagSeguro. The issuer file's other rows are brands of B conglomerates.
+ISSUER_D_CODES = {"Nubank": "C0084693", "C6 Bank": "C0084844",
+                  "Neon (Banco Neon / Neon Pagamentos)": "C0085702",
+                  "PagBank (PagSeguro)": "C0084813", "Mercado Pago": "C0084820",
+                  "Stone IP (Stone conta PJ)": "C0084686",
+                  "ACG IP (Americanas card, prepaid payment account)": "C0086093",
+                  "ACG IP (PagCorp, corporate prepaid)": "C0086093", "Alelo IP": "C0087580",
+                  "PicPay": "C0088022", "Inter": "C0080996", "Cora SCFI": "C0085317",
+                  "ASAAS GESTAO FINANCEIRA IP": "C0085771"}
+
+
+def _fee_panel_cq(cols: list, notes: list) -> pd.DataFrame:
+    """The fee panel at conglomerate x quarter, read by pyarrow column subsets. Stage 7 joins the
+    listed columns on that key, so every row of a conglomerate-quarter carries the same value; a
+    conglomerate-quarter with two values is noted."""
+    import pyarrow.parquet as pq
+    keys = ["CodConglomeradoPrudencial", "year", "quarter"]
+    t = pq.read_table(FEE_PANEL, columns=keys + cols).to_pandas()
+    t["CodConglomeradoPrudencial"] = t["CodConglomeradoPrudencial"].astype(str).str.strip()
+    multi = int((t.groupby(keys)[cols].nunique() > 1).any(axis=1).sum())
+    if multi:
+        notes.append(f"{FEE_PANEL.name}: {multi} conglomerate-quarters carry two values of {cols}; "
+                     "demand.fee.* read the first.")
+    return t.groupby(keys, as_index=False).first()
+
+
+def _issuer_free_quarters() -> set:
+    """(code, year, quarter) of the D conglomerates whose issuer states a R$ 0 monthly
+    account-keeping fee for individuals in account_fees.csv (fee_type maintenance_monthly, a rule
+    that starts "R$0" or "No tariffs", not conditional on card spending, not a PJ or MEI product),
+    from the first to the last capture of such a rule (bridged), MIN_YEAR-MAX_YEAR."""
+    from utils import raw_paths as _raw_paths
+    a = pd.read_csv(_raw_paths.DATA_RAW / "issuers" / "posted_rates" / "account_fees.csv", dtype=str)
+    a = a[a["issuer"].isin(ISSUER_D_CODES)]
+    rule = a["fee_rule"].fillna("")
+    free = (a["fee_type"].eq("maintenance_monthly")
+            & (rule.str.startswith("R$0") | rule.str.startswith("No tariffs"))
+            & ~rule.str.contains("if card spending", regex=False)
+            & ~a["product"].fillna("").str.contains(r"PJ|MEI", regex=True))
+    a = a[free]
+    out = set()
+    for code, g in a.groupby(a["issuer"].map(ISSUER_D_CODES)):
+        lo, hi = pd.to_datetime(g["valid_from"]).min(), pd.to_datetime(g["valid_to"]).max()
+        for q in pd.period_range(f"{MIN_YEAR}Q1", f"{MAX_YEAR}Q4", freq="Q"):
+            if q.start_time <= hi and q.end_time >= lo:
+                out.add((code, q.year, q.quarter))
+    return out
+
+
+def collect_fee_listed(notes: list):
+    """demand.fee.pkg1.*: the listed Package I price of stage 7 (the head institution's price in
+    force on the quarter's last day, or the median of the members' positive prices when the head
+    does not list it; R$ a month, a ceiling, not the price charged), read from the fee panel.
+    big5.lo/hi.2024: the lowest and highest of the five largest (BIG5_CODES) in 2024Q4, the quarter
+    fees.listed.pkg1.big5.median.2024 reads. chg.rate: over the B conglomerates of the panel,
+    MIN_YEAR-MAX_YEAR, the share of consecutive quarter pairs with the price known in both in which
+    it changes."""
+    import hashlib
+    if not FEE_PANEL.is_file():
+        notes.append(f"{FEE_PANEL.name} not found in {FEE_PANEL.parent}; run fees/panel_fee_merge.py "
+                     "--patch-market for demand.fee.pkg1.*.")
+        return
+    keys = ["CodConglomeradoPrudencial", "year", "quarter"]
+    cq = _fee_panel_cq([FEE_PKG1, "is_B"], notes)
+    md5 = hashlib.md5(FEE_PANEL.read_bytes()).hexdigest()[:8]
+    src = (f"{FEE_PANEL.name} (md5 {md5}; stage 7, fees/panel_fee_merge.py --patch-market; "
+           f"columns by pyarrow), {FEE_PKG1}")
+    lst = ("the listed Package I price (code 1501, individuals) of stage 7: the head institution's "
+           "price in force on the quarter's last day, or the median of the members' positive prices "
+           "when the head does not list it; R$ a month, a listed ceiling, not the price charged")
+    q4 = cq[(cq["year"] == 2024) & (cq["quarter"] == 4) & cq["CodConglomeradoPrudencial"].isin(BIG5_CODES)]
+    p = q4.set_index("CodConglomeradoPrudencial")[FEE_PKG1].dropna()
+    missing = sorted(set(BIG5_CODES) - set(p.index))
+    if missing:
+        notes.append(f"{FEE_PANEL.name}: no 2024Q4 Package I price for {missing}; "
+                     "demand.fee.pkg1.big5.*.2024 absent.")
+    else:
+        detail = dict(prices={BIG5_CODES[c]: float(v) for c, v in p.items()}, median=float(p.median()),
+                      fee_panel_md5=md5)
+        for leaf, v, word in (("lo", float(p.min()), "lowest"), ("hi", float(p.max()), "highest")):
+            add(f"demand.fee.pkg1.big5.{leaf}.2024", "FEES",
+                f"Listed Package I price, {word} of the five largest, 2024Q4", v,
+                f"The {word} over Banco do Brasil, Bradesco, Caixa, Itau and Santander of {lst}; "
+                "2024Q4 (31 December 2024)", src, "ok", display=f"R$ {fmt3s(v)}", unit="BRL",
+                detail=detail)
+    is_b = pd.to_numeric(cq["is_B"], errors="coerce").fillna(0).astype(int) == 1
+    s = cq[is_b & cq["year"].between(MIN_YEAR, MAX_YEAR)].sort_values(keys)
+    g = s.groupby("CodConglomeradoPrudencial")
+    prev = g[FEE_PKG1].shift()
+    gap = (s["year"] * 4 + s["quarter"]) - (g["year"].shift() * 4 + g["quarter"].shift())
+    pair = (gap == 1) & prev.notna() & s[FEE_PKG1].notna()
+    chg = pair & (s[FEE_PKG1] != prev)
+    per = chg[pair].groupby(s.loc[pair, "CodConglomeradoPrudencial"]).sum()
+    n_pairs, n_chg = int(pair.sum()), int(chg.sum())
+    if not n_pairs:
+        notes.append(f"{FEE_PANEL.name}: no consecutive quarter pair of a B conglomerate with a "
+                     "Package I price; demand.fee.pkg1.chg.rate absent.")
+        return
+    rate = n_chg / n_pairs
+    add("demand.fee.pkg1.chg.rate", "FEES",
+        "Share of quarters in which a B conglomerate's listed Package I price changes", rate,
+        f"Over the B conglomerates of the panel, {MIN_YEAR}Q1-{MAX_YEAR}Q4, the share of consecutive "
+        "quarter pairs with the price known in both quarters in which it differs from the previous "
+        f"quarter's. The price is {lst}", src, "ok", display=disp(rate, "share"), unit="fraction",
+        detail=dict(changes=n_chg, pairs=n_pairs, conglomerates=int(len(per)),
+                    never_change=int((per == 0).sum()),
+                    rises=int((chg & (s[FEE_PKG1] > prev)).sum()),
+                    cuts=int((chg & (s[FEE_PKG1] < prev)).sum()),
+                    big5={BIG5_CODES[c]: int(per.get(c, 0)) for c in BIG5_CODES}, fee_panel_md5=md5))
+
+
+def collect_fee_coverage(notes: list):
+    """demand.fee.cov.*: the share of the demand sample's deposits whose conglomerate-quarter has a
+    listed Package I price (stage 7's value on the fee panel), on the newest
+    demand_{k}_*spec_12.parquet of each link routine; the key carries the first routine's (E3) and
+    the detail every routine's. Weights: the parquet's deposit_balance summed over the stored rows of
+    the conglomerate-quarter. B and D by is_B; Dany adds to D's census price the quarters in which
+    the issuer states a R$ 0 monthly account-keeping fee (_issuer_free_quarters)."""
+    if not FEE_PANEL.is_file():
+        notes.append(f"{FEE_PANEL.name} not found in {FEE_PANEL.parent}; run fees/panel_fee_merge.py "
+                     "--patch-market for demand.fee.cov.*.")
+        return
+    base = _paths.PROCESSED / "market_panel.parquet"
+    if base.is_file() and FEE_PANEL.stat().st_mtime < base.stat().st_mtime:
+        notes.append(f"{FEE_PANEL.name} is older than {base.name}: rerun stage 7 before quoting "
+                     "demand.fee.*.")
+    keys = ["CodConglomeradoPrudencial", "year", "quarter"]
+    cq = _fee_panel_cq([FEE_PKG1], notes)
+    free = _issuer_free_quarters()
+    vals = {}
+    for E in ROUTINES:
+        fs = sorted(rc.DEMAND_PREP_DIR.glob(f"demand_{E}_*spec_12.parquet"), key=lambda p: p.stat().st_mtime)
+        if not fs:
+            notes.append(f"no demand_{E}_*spec_12.parquet in {rc.DEMAND_PREP_DIR}; demand.fee.cov.* "
+                         f"has no E{E}.")
+            continue
+        d = pd.read_parquet(fs[-1], columns=["is_B"] + keys + ["deposit_balance"])
+        d["CodConglomeradoPrudencial"] = d["CodConglomeradoPrudencial"].astype(str).str.strip()
+        d["is_B"] = d["is_B"].fillna(False).astype(bool)
+        c = (d.groupby(["is_B"] + keys, as_index=False)["deposit_balance"].sum()
+             .merge(cq, on=keys, how="left", indicator=True))
+        if (c["_merge"] == "left_only").any():
+            notes.append(f"{fs[-1].name}: {int((c['_merge'] == 'left_only').sum())} conglomerate-quarters "
+                         f"absent from {FEE_PANEL.name}; counted as unpriced in demand.fee.cov.*.")
+        has = c[FEE_PKG1].notna()
+        iss = pd.Series([k in free for k in zip(c["CodConglomeradoPrudencial"], c["year"], c["quarter"])],
+                        index=c.index)
+        dep, b = c["deposit_balance"], c["is_B"]
+        vals[E] = dict(file=fs[-1].name,
+                       B=float(dep[has & b].sum() / dep[b].sum()),
+                       D=float(dep[has & ~b].sum() / dep[~b].sum()),
+                       Dany=float(dep[(has | iss) & ~b].sum() / dep[~b].sum()),
+                       cq_B=int(b.sum()), cq_B_priced=int((has & b).sum()),
+                       cq_D=int((~b).sum()), cq_D_priced=int((has & ~b).sum()),
+                       cq_D_any=int(((has | iss) & ~b).sum()))
+    if not vals:
+        return
+    E0 = next(iter(vals))
+    src = (f"{vals[E0]['file']} in DEMAND_PREP (deposit_balance by conglomerate-quarter), "
+           f"{FEE_PANEL.name} ({FEE_PKG1}, stage 7) and DATA_RAW/issuers/posted_rates/account_fees.csv "
+           "(the issuers' rules, for Dany)")
+    words = {"B": ("B", "a listed Package I price", "a listed Package I price"),
+             "D": ("D", "a listed Package I price", "a listed Package I price (the BCB tariff census)"),
+             "Dany": ("D", "a listed Package I price or an issuer's R$ 0 fee",
+                      "a listed Package I price or an issuer's stated R$ 0 monthly account-keeping fee "
+                      "for individuals (account_fees.csv, bridged from its first to its last capture)")}
+    for leaf, (side, short, what) in words.items():
+        v = vals[E0][leaf]
+        add(f"demand.fee.cov.{leaf}.dep", "FEES",
+            f"Share of {side} deposits in the demand sample with {short} ({rname(E0)})", v,
+            f"Share of the {side} deposits of the demand parquet of {rname(E0)} (deposit_balance summed "
+            f"over the stored rows of each conglomerate-quarter) in conglomerate-quarters with {what}; "
+            "the detail gives every link routine", src, "ok", display=disp(v, "share"), unit="fraction",
+            detail={f"E{E}": x for E, x in vals.items()})
+
+
 CCS_MONTHLY = _paths.rout_dir() / "ccs_flows_institution_month_mapped.csv"   # make_ccs_flows_conglomerate.py
 CCS_EVENTS = _paths.rout_dir() / "ccs_flow_events_pf_top25.csv"              # its flagged institution-months
 CCS_ITAUCARD = "17192451"               # Banco Itaucard: a card issuer inside Itaú Unibanco (B)
@@ -2961,6 +3144,10 @@ def collect_pix_adv(notes: list):
 # f_placebo is the median F over the entry's placebo_shuffles draws (one draw where the field is
 # absent or 1: the entries filed before the 99-shuffle placebo).
 P3_F_FIELDS = {"f": "f", "f_placebo": "f_placebo", "f_net": "f_net"}
+# Their state-cluster counterparts (the same regressions and placebo draws, clustered by the MCA's
+# state), in the entries whose P3 run wrote them.
+P3_F_FIELDS_STATE = {"f_state": "f_state", "f_net_state": "f_net_state",
+                     "f_placebo_state": "f_placebo_state"}
 
 
 def collect_pix_stakes(notes: list):
@@ -2970,7 +3157,8 @@ def collect_pix_stakes(notes: list):
     statistics are keyed as integers (half up), so \\pn{} prints them without decimals; their
     unrounded values are in the entry's detail. With more than one placebo shuffle, f_placebo is
     the shuffles' median F and fs.placebo_share_above the share of shuffles whose F is at or
-    above the real one (placebo_share_ge)."""
+    above the real one (placebo_share_ge). fs.f_state, f_net_state, f_placebo_state and
+    placebo_share_above_state are the same with state clusters, on the same draws."""
     rout = _paths.rout_dir()
     csv = rout / "p3_stakes_mca_quarter.csv"
     if not csv.is_file():
@@ -2992,8 +3180,14 @@ def collect_pix_stakes(notes: list):
                      f"{e['median_S']}; pix.stakes.* entries absent.")
         return
     fs_full = {k: float(e[f]) for k, f in P3_F_FIELDS.items()}
-    v = dict(median=float(e["median_S"]), fs={k: _half_up(x) for k, x in fs_full.items()})
     shuffles = int(e.get("placebo_shuffles", 1))
+    state = shuffles > 1 and all(f in e for f in [*P3_F_FIELDS_STATE.values(), "placebo_share_ge_state"])
+    if state:
+        fs_full.update({k: float(e[f]) for k, f in P3_F_FIELDS_STATE.items()})
+    else:
+        notes.append(f"p3_numbers.json panels.{md5} has no state-cluster F with its placebo; "
+                     "pix.stakes.fs.*_state absent.")
+    v = dict(median=float(e["median_S"]), fs={k: _half_up(x) for k, x in fs_full.items()})
     if shuffles > 1:
         v["fs"]["placebo_share_above"] = float(e["placebo_share_ge"])
         placebo = (f"the median F over {shuffles} draws with rho~ shuffled across conglomerates "
@@ -3003,18 +3197,26 @@ def collect_pix_stakes(notes: list):
         notes.append(f"p3_numbers.json panels.{md5} has one placebo shuffle; pix.stakes.fs.f_placebo "
                      "is that draw and fs.placebo_share_above is absent.")
         placebo = "F with rho~ shuffled once across conglomerates within the quarter"
+    if state:
+        v["fs"]["placebo_share_above_state"] = float(e["placebo_share_ge_state"])
     add("pix.stakes", "T", "Stakes S_mt (P3)", v,
         "median: median of S_mt, R$ a year, over market-quarters; fs.f / f_net: F of log sd on "
         "log sd~ (the cost shifters), and net of lagged HHI and number of banks; fs.f_placebo: "
-        f"{placebo}; MCA and quarter effects, MCA clusters; F rounded half up to an integer "
-        "(unrounded in detail.fs)",
+        f"{placebo}; MCA and quarter effects, MCA clusters; fs.f_state / f_net_state / "
+        "f_placebo_state / placebo_share_above_state: the same with state clusters (the MCA's "
+        "state, IBGE crosswalk), on the same draws; F rounded half up to an integer (unrounded "
+        "in detail.fs)",
         f"Rout/p3_numbers.json panels.{md5} (diagnostics/diag_p3_numbers.py; panel "
         f"{e['panel_md5']}, P3 run {e['written']}), the panel of Rout/{csv.name}", "ok",
         detail=dict(fs=fs_full, placebo_shuffles=shuffles, panel_md5=e["panel_md5"],
-                    written=e["written"]),
+                    written=e["written"],
+                    **({"n_state_clusters": int(e["n_state_clusters"])} if state else {})),
         display=f"median {fmt3s(v['median'])}; F {v['fs']['f']}, placebo {v['fs']['f_placebo']}"
                 + (f" ({shuffles} draws, share above {fmt3s(v['fs']['placebo_share_above'])})"
-                   if shuffles > 1 else " (one draw)") + f", net {v['fs']['f_net']}")
+                   if shuffles > 1 else " (one draw)") + f", net {v['fs']['f_net']}"
+                + (f"; state clusters: F {v['fs']['f_state']}, placebo {v['fs']['f_placebo_state']} "
+                   f"(share above {fmt3s(v['fs']['placebo_share_above_state'])}), net "
+                   f"{v['fs']['f_net_state']}" if state else ""))
 
 
 # The B versus D type-4 gap of T10b (diagnostics/diag_t10b_rate_gap.py): the panel its keys read
@@ -4791,7 +4993,7 @@ FAMILIES = {
               "collect_k1_pilots",
               "collect_pix_adv",
               "collect_pix_stakes", "collect_gap4", "collect_pix_roster", "collect_big5_branches",
-              "collect_lambda_registry", "collect_netflow_gap"),
+              "collect_lambda_registry", "collect_netflow_gap", "collect_fee_listed"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
                 "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
                 "collect_first_stage_strength", "collect_xi_diagnostics", "collect_share_cap",
@@ -4799,7 +5001,7 @@ FAMILIES = {
                 "collect_phi_variance",
                 "collect_active_truncation", "collect_entry_carry",
                 "collect_type5_robustness", "collect_cluster_imbalance", "collect_tr5",
-                "collect_cap_screen", "collect_findex"),
+                "collect_cap_screen", "collect_findex", "collect_fee_coverage"),
     "bbl": ("collect_bbl", "collect_polfunc", "collect_phi_path", "collect_design"),
     "local": ("collect_fees", "collect_ccs", "collect_tax_clock",   # side files outside the panel; never pending
               "collect_findex_series"),
@@ -4868,6 +5070,8 @@ def main():
     collect_first_stage_strength(notes)
     collect_tr5(notes)
     collect_fees(notes)
+    collect_fee_listed(notes)
+    collect_fee_coverage(notes)
     collect_ccs(notes)
     collect_tax_clock(notes)
     collect_k2b(notes)

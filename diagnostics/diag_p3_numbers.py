@@ -18,6 +18,11 @@ block of an earlier copy too (how the d01b8bae and 45dbfc58 entries were seeded)
                   placebo_share_ge_net the share of draws with F at or above f, f_net;
                   placebo_seed. Entries with placebo_shuffles 1 (the p3 blocks written before the
                   99 draws) hold one draw in f_placebo, seed 20261103, and no net placebo
+                f_state, f_net_state: the same F clustered by state (n_state_clusters);
+                  f_placebo_state, f_net_placebo_state: the median state-cluster F of the same
+                  draws; placebo_share_ge_state, placebo_share_ge_net_state: the share of draws
+                  with state-cluster F at or above f_state, f_net_state. Only in entries whose p3
+                  block has them
                 f_level, f_log: S on S~ in levels and logs; n_first_stage
                 n_mq, n_mq_S, sd_spread_pp_median, cost_fit_joint_f
                 median_S_measured, f_measured, f_net_measured, carried_weight_share_mean: the
@@ -52,7 +57,10 @@ DOC = ("P3 first-stage numbers by panel (8-character md5, as p3_stakes_mca_quart
        "the quarter, placebo_shuffles draws: f_placebo and f_net_placebo = median F of the draws, "
        "placebo_share_ge and placebo_share_ge_net = share of draws with F at or above f and f_net. "
        "Where placebo_shuffles is 1, f_placebo is a single draw (seed 20261103) and there is no net "
-       "placebo.")
+       "placebo. State clusters (the MCA's state, IBGE crosswalk), where present: f_state, "
+       "f_net_state; f_placebo_state and f_net_placebo_state = median state-cluster F of the same "
+       "draws; placebo_share_ge_state and placebo_share_ge_net_state = share of draws with "
+       "state-cluster F at or above f_state and f_net_state.")
 
 
 def entry(p3: dict) -> dict:
@@ -67,6 +75,13 @@ def entry(p3: dict) -> dict:
                  placebo_seed=pl["seed"])
     else:
         e.update(placebo_shuffles=1)
+    if "f_state" in d["sd_only_log"]:   # the state-cluster counterparts, where the p3 block has them
+        e.update(f_state=d["sd_only_log"]["f_state"], f_net_state=d["sd_only_log_ctrl_structure"]["f_state"],
+                 n_state_clusters=d["sd_only_log"]["n_state_clusters"])
+        if pl and "f_state_median" in pl:
+            e.update(f_placebo_state=pl["f_state_median"], f_net_placebo_state=pl["f_net_state_median"],
+                     placebo_share_ge_state=pl["share_ge_state"],
+                     placebo_share_ge_net_state=pl["share_ge_net_state"])
     e.update(f_level=d["level"]["f"], f_log=d["log"]["f"], n_first_stage=d["sd_only_log"]["n"],
              n_mq=p3["n_mq"], n_mq_S=p3["n_mq_S"],
              sd_spread_pp_median=p3["sd_spread_pp_quantiles"]["0.5"],
@@ -96,7 +111,10 @@ def main():
               f"{e['placebo_share_ge_net']:.3f}), {e['placebo_shuffles']} draws"
               if e["placebo_shuffles"] > 1 else
               f"placebo {e['f_placebo']:.2f} (one draw), net {e['f_net']:.2f}")
-        print(f"{e['panel_md5'][:8]}: median S {e['median_S']:.1f}, F {e['f']:.2f}, {pl}  ({src})")
+        st = (f"; state clusters: F {e['f_state']:.2f}, placebo median {e['f_placebo_state']:.2f} "
+              f"(share at or above {e['placebo_share_ge_state']:.3f}), net {e['f_net_state']:.2f}"
+              if "f_placebo_state" in e else "")
+        print(f"{e['panel_md5'][:8]}: median S {e['median_S']:.1f}, F {e['f']:.2f}, {pl}{st}  ({src})")
     cur = entry(json.loads(SRC.read_text(encoding="utf-8"))["p3"])
     s = pd.read_csv(STAKES, usecols=["S", "panel_md5"])
     if str(s["panel_md5"].iloc[0]) != cur["panel_md5"][:8] or abs(s["S"].median() - cur["median_S"]) > 1e-9:

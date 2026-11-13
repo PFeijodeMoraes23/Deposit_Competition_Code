@@ -333,6 +333,12 @@ tree. A checksum mismatch refuses **that family only**; the rest still land and 
 * **Per-routine memory.** `cl_mem_for` gives E1/E2 `${CL_MEM_BIG:-600G}` and everything else
   `${CL_MEM_DEFAULT:-200G}`, applied on every RC submission. The BBL/CF CPU jobs use `MEM=256G` for
   all routines; the polfunc pre-step takes 64G.
+* **ext1 runs with the engine's step and inner-guard flags on.** `blp_stage_job.sh` gives the IFT
+  ext1 stage, every one of its starts, `BLP_OUTER_STEP=lite BLP_OUTER_R0=0.02 BLP_INNER_GUARD=1
+  BLP_INNER_CLAMP_TEST=1` (validated on E3/E4 on 2026-11-12, tag val1112); every other stage keeps
+  the engine's defaults. The grouped head therefore runs two Julia processes, sigma..rc4 and then
+  ext1, and its log prints one `[stages ...]` line before each. An exported value wins;
+  `BLP_EXT1_FLAGS=0` (e.g. `BLP_EXT1_FLAGS=0 sbatch pipeline_all.sh`) leaves ext1 at the defaults.
 * **Wall time is capped by the QOS, not by us.** `CL_WALL_DEEP` / `CL_WALL_CAP` default to 2 days
   because a 4-day request is rejected at submit time with `QOSMaxWallDurationPerJobLimit`.
 * **The archiver has no default mode.** Neither `--copy` nor `--move` is reachable by omission, and

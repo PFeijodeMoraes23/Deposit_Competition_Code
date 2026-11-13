@@ -22,6 +22,7 @@ BCB_PIX_MUNICIPAL_RAW = DATA_RAW / "BCB" / "pix_municipal" / "raw"             #
 BCB_PIX_PARTICIPANTS = DATA_RAW / "BCB" / "pix_participants"                   # Pix by participant (ISPB)
 BCB_PIX_KEYS = BCB_PIX_PARTICIPANTS / "chaves"                                 # scrape_pix_keys.py
 BCB_SELIC_SGS = DATA_RAW / "BCB" / "selic_sgs"                                 # scrape_national_series.py (SGS)
+BCB_MONETARY_AGGREGATES_SGS = DATA_RAW / "BCB" / "monetary_aggregates_sgs"     # scrape_bcb_monetary_aggregates.py (SGS M1-M4)
 BCB_TARIFAS_MONTHLY = DATA_RAW / "BCB" / "tarifas_monthly"                     # fees/scrape_bcb_tarifas_monthly.py
 BCB_TARIFAS_LAI = DATA_RAW / "BCB" / "tarifas_lai_18810_025439" / "raw"        # LAI delivery 2026-10-27 (same files)
 BCB_TARIFAS_WAYBACK = DATA_RAW / "BCB" / "tarifas_wayback"                     # old tariff pages: CDX list, sample
